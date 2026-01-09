@@ -86,6 +86,6 @@ helm upgrade --install tradingbots ./helm/tradingbots \
 
 ## Need Help?
 
-- Check the [LLM_README.md](../LLM_README.md) for detailed developer documentation
 - Review the [Example Bots](examples/example-bots.md) for implementation patterns
-- See the [Common Pitfalls](../README.md#common-pitfalls) section in the README
+- Check the [Deployment Guide](DEPLOYMENT.md) for documentation deployment setup
+- See the [API Reference](api/bot.md) for complete API documentation

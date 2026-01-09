@@ -35,6 +35,8 @@ jobs:
         uses: actions/configure-pages@v4
 
       - name: Build documentation
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           uv run mkdocs build
 
