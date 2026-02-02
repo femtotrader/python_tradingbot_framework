@@ -5,7 +5,7 @@ from typing import Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
-from utils.botclass import Bot
+from utils.core import Bot
 
 
 class AIHedgeFundBot(Bot):

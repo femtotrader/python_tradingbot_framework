@@ -3,10 +3,13 @@
 import logging
 from datetime import datetime, timezone
 
-from utils.data_service import DataService
-from utils.db import Bot, PortfolioWorth, get_db_session
-from utils.portfolio_worth_calculator import calculate_portfolio_worth
-from utils.stock_fundamentals_loader import get_portfolio_symbols, load_stock_news_earnings_insider
+from utils.core import BotModel, PortfolioWorth, get_db_session
+from utils.data import (
+    DataService,
+    get_portfolio_symbols,
+    load_stock_news_earnings_insider,
+)
+from utils.portfolio import calculate_portfolio_worth
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,7 +24,7 @@ def main():
     
     with get_db_session() as session:
         # Get all bots
-        bots = session.query(Bot).all()
+        bots = session.query(BotModel).all()
         logger.info(f"Found {len(bots)} bots to process")
         
         for bot in bots:

@@ -28,12 +28,17 @@ Example:
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import logging
+
 import pandas as pd
 
 from .bot_repository import BotRepository
 from .data_service import DataService
 from .db import RunLog, get_db_session
 from .portfolio_manager import PortfolioManager
+
+
+logger = logging.getLogger(__name__)
 
 
 class Bot:
@@ -430,7 +435,7 @@ class Bot:
                 non_usd_holdings = {k: v for k, v in self.dbBot.portfolio.items() if k != "USD" and v > 0}
                 holding_info = f"Holdings: {len(non_usd_holdings)} assets"
             
-            print(f"Decision: {decision}")
+            logger.info("Decision: %s", decision)
             with get_db_session() as session:
                 run = RunLog(
                     bot_name=bot_name,
@@ -440,7 +445,7 @@ class Bot:
                 session.add(run)
                 # Context manager will commit automatically
         except Exception as e:
-            print(f"Error in makeOneIteration: {e}")
+            logger.error("Error in makeOneIteration: %s", e)
             with get_db_session() as session:
                 run = RunLog(
                     bot_name=bot_name,
@@ -567,7 +572,7 @@ class Bot:
             self.sell(self.symbol)
             return -1
         else:
-            print("doing nothing!")
+            logger.info("No trade action taken (hold).")
         return 0
     
     def local_optimize(

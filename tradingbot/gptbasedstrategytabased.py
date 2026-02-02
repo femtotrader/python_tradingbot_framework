@@ -1,4 +1,4 @@
-from utils.botclass import Bot
+from utils.core import Bot
 
 
 class gptbasedstrategytabased(Bot):

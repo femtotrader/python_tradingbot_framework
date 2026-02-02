@@ -167,3 +167,9 @@ bots:
 
   - name: aideepseektoolbot
     schedule: "18 18 * * 4"  #  at 6:18 PM, Thursday
+
+  - name: regimeadaptivebot
+    schedule: "20 20 * * 3"  # Weekly on Wednesday at 8:20 PM
+
+  - name: earningsinsidertiltbot
+    schedule: "30 20 * * 3"  # Weekly on Wednesday at 8:30 PM

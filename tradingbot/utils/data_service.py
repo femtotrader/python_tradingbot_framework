@@ -2,6 +2,8 @@
 
 from typing import Optional, Tuple
 
+import logging
+
 import pandas as pd
 import yfinance as yf
 from cachetools import TTLCache
@@ -20,6 +22,9 @@ from .helpers import (
     parse_period_to_date_range,
     validate_dataframe_columns,
 )
+from .historic_repository import HistoricDataRepository
+
+logger = logging.getLogger(__name__)
 
 # TTL cache for getLatestPrice
 _price_cache = TTLCache(maxsize=PRICE_CACHE_MAXSIZE, ttl=PRICE_CACHE_TTL)
@@ -46,6 +51,48 @@ class DataService:
         """Initialize the data service."""
         self.data: Optional[pd.DataFrame] = None
         self.datasettings: Tuple[Optional[str], Optional[str]] = (None, None)
+        # Repository responsible for all historic_data table access.
+        self._repo = HistoricDataRepository()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clean_yf_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Clean raw yfinance OHLCV data.
+
+        - Drops rows where all OHLCV fields are NaN.
+        - Drops rows where the close price is NaN (most consumers rely on close).
+        """
+        if df.empty:
+            return df
+
+        ohlcv_cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
+        if not ohlcv_cols:
+            return df
+
+        mask_all_nan = df[ohlcv_cols].isna().all(axis=1)
+        if "close" in df.columns:
+            mask_close_nan = df["close"].isna()
+            mask_bad = mask_all_nan | mask_close_nan
+        else:
+            mask_bad = mask_all_nan
+
+        if not mask_bad.any():
+            return df
+
+        return df.loc[~mask_bad].copy()
+
+    @staticmethod
+    def _merge_db_and_yf(db_data: pd.DataFrame, yf_data: pd.DataFrame) -> pd.DataFrame:
+        """Merge DB and yfinance data, de-duplicating on timestamp and sorting."""
+        if db_data is None or db_data.empty:
+            return yf_data.reset_index(drop=True)
+        data = pd.concat([db_data, yf_data], ignore_index=True)
+        data = data.drop_duplicates(subset=["timestamp"], keep="last")
+        return data.sort_values("timestamp").reset_index(drop=True)
     
     def get_data_from_db(
         self,
@@ -65,40 +112,16 @@ class DataService:
             DataFrame with columns: symbol, timestamp, open, high, low, close, volume
             Empty DataFrame if no data found
         """
-        with get_db_session() as session:
-            query = session.query(HistoricData).filter_by(symbol=symbol)
-            
-            if start_date:
-                start_date = ensure_utc_timestamp(start_date)
-                query = query.filter(HistoricData.timestamp >= start_date)
-            
-            if end_date:
-                end_date = ensure_utc_timestamp(end_date)
-                query = query.filter(HistoricData.timestamp <= end_date)
-            
-            query = query.order_by(HistoricData.timestamp)
-            results = query.all()
-            
-            if not results:
-                return pd.DataFrame()
-            
-            # Convert to DataFrame
-            data = pd.DataFrame([{
-                "symbol": r.symbol,
-                "timestamp": r.timestamp,
-                "open": r.open,
-                "high": r.high,
-                "low": r.low,
-                "close": r.close,
-                "volume": r.volume,
-            } for r in results])
-            
-            # Ensure timestamp is timezone-aware (UTC)
-            if "timestamp" in data.columns:
-                data["timestamp"] = pd.to_datetime(data["timestamp"])
-                data["timestamp"] = ensure_utc_series(data["timestamp"])
-            
+        # Delegate core DB access to the repository and normalize timestamps to UTC.
+        data = self._repo.get_range(symbol=symbol, start_date=start_date, end_date=end_date)
+        if data.empty:
             return data
+
+        if "timestamp" in data.columns:
+            data["timestamp"] = pd.to_datetime(data["timestamp"])
+            data["timestamp"] = ensure_utc_series(data["timestamp"])
+
+        return data
     
     def get_yf_data(
         self,
@@ -193,15 +216,11 @@ class DataService:
             yf_data["timestamp"] = pd.to_datetime(yf_data["timestamp"])
             # Make timezone-aware (UTC) if not already
             yf_data["timestamp"] = ensure_utc_series(yf_data["timestamp"])
+            # Clean out unusable OHLCV rows
+            yf_data = self._clean_yf_ohlcv(yf_data)
             
             # Merge DB data with yfinance data, removing duplicates
-            if not db_data.empty:
-                # Combine and remove duplicates based on timestamp
-                data = pd.concat([db_data, yf_data], ignore_index=True)
-                data = data.drop_duplicates(subset=["timestamp"], keep="last")
-                data = data.sort_values("timestamp").reset_index(drop=True)
-            else:
-                data = yf_data
+            data = self._merge_db_and_yf(db_data, yf_data)
             
             # Save new data to DB if requested
             if save_to_db:
@@ -272,7 +291,12 @@ class DataService:
         db_data_list = []
         symbols_to_fetch = []
         
-        print(f"Checking database for {len(symbols)} symbols (interval={interval}, period={period})...")
+        logger.info(
+            "Checking database for %d symbols (interval=%s, period=%s)...",
+            len(symbols),
+            interval,
+            period,
+        )
         
         for symbol in symbols:
             # For daily data, don't filter by end_date (which is "now") because data timestamps
@@ -283,7 +307,7 @@ class DataService:
                 db_data = self.get_data_from_db(symbol=symbol, start_date=start_date, end_date=end_date)
             
             if db_data.empty:
-                print(f"  {symbol}: No DB data found, fetching from yfinance")
+                logger.info("No DB data for %s, fetching from yfinance", symbol)
                 symbols_to_fetch.append(symbol)
             else:
                 # Check freshness - for daily data, check if we have today's or yesterday's data
@@ -302,21 +326,33 @@ class DataService:
                     # (yesterday's data is fine if markets haven't closed today yet)
                     if latest_db_date >= yesterday_date:
                         db_data_list.append(db_data)
-                        # Don't print for every symbol to avoid spam, but could add verbose mode
+                        # Don't log for every symbol to avoid spam, but could add verbose mode
                     else:
                         # Data is older than yesterday, fetch fresh data
-                        print(f"  {symbol}: DB data too old (latest: {latest_db_date}), fetching from yfinance")
+                        logger.info(
+                            "%s: DB data too old (latest: %s), fetching from yfinance",
+                            symbol,
+                            latest_db_date,
+                        )
                         symbols_to_fetch.append(symbol)
                 else:
                     # For intraday data, use time-based freshness check
                     time_diff_minutes = (now - latest_db_timestamp).total_seconds() / 60
                     if time_diff_minutes > FRESHNESS_TOLERANCE_MINUTES:
-                        print(f"  {symbol}: DB data stale ({time_diff_minutes:.1f} min old), fetching from yfinance")
+                        logger.info(
+                            "%s: DB data stale (%.1f min old), fetching from yfinance",
+                            symbol,
+                            time_diff_minutes,
+                        )
                         symbols_to_fetch.append(symbol)
                     else:
                         db_data_list.append(db_data)
         
-        print(f"Using DB data for {len(db_data_list)} symbols, fetching {len(symbols_to_fetch)} symbols from yfinance")
+        logger.info(
+            "Using DB data for %d symbols, fetching %d symbols from yfinance",
+            len(db_data_list),
+            len(symbols_to_fetch),
+        )
         
         # Download missing or stale symbols from yfinance
         yf_data_list = []
@@ -377,23 +413,21 @@ class DataService:
                         
                         # Merge with existing DB data if any
                         db_data_for_symbol = self.get_data_from_db(symbol=symbol, start_date=start_date, end_date=end_date)
-                        if not db_data_for_symbol.empty:
-                            # Combine and remove duplicates
-                            combined = pd.concat([db_data_for_symbol, sym_df], ignore_index=True)
-                            combined = combined.drop_duplicates(subset=["timestamp"], keep="last")
-                            combined = combined.sort_values("timestamp").reset_index(drop=True)
-                            yf_data_list.append(combined)
-                        else:
-                            yf_data_list.append(sym_df)
+                        merged = self._merge_db_and_yf(db_data_for_symbol, self._clean_yf_ohlcv(sym_df))
+                        yf_data_list.append(merged)
                     else:
-                        print(f"Warning: Symbol {symbol} not found in downloaded data, skipping")
+                        logger.warning(
+                            "Symbol %s not found in downloaded data, skipping", symbol
+                        )
                         # Use DB data if available
                         db_data_for_symbol = self.get_data_from_db(symbol=symbol, start_date=start_date, end_date=end_date)
                         if not db_data_for_symbol.empty:
                             yf_data_list.append(db_data_for_symbol)
                         continue
                 except Exception as e:
-                    print(f"Warning: Error processing symbol {symbol}: {e}, skipping")
+                    logger.warning(
+                        "Error processing symbol %s: %s, skipping", symbol, e
+                    )
                     # Use DB data if available
                     db_data_for_symbol = self.get_data_from_db(symbol=symbol, start_date=start_date, end_date=end_date)
                     if not db_data_for_symbol.empty:
@@ -434,8 +468,10 @@ class DataService:
         available_cols = [col for col in column_order if col in symbol_data.columns]
         symbol_data = symbol_data[available_cols]
         
-        # Save each symbol's data to DB if requested
-        # Only save symbols that were fetched from yfinance (they might have new data)
+        # Save each symbol's data to DB if requested.
+        # Only save symbols that were fetched from yfinance (they might have new data).
+        # NOTE: We deliberately avoid nesting get_db_session() here to prevent
+        # "generator didn't stop" errors from the retrying context manager.
         if save_to_db and symbols_to_fetch:
             for symbol in symbols_to_fetch:
                 # Get data for this symbol from the combined DataFrame
@@ -444,32 +480,17 @@ class DataService:
                     continue
                 # Ensure all required columns are present
                 if not all(col in symbol_df.columns for col in REQUIRED_DATA_COLUMNS):
-                    print(f"Warning: Missing required columns for {symbol}, skipping DB save")
+                    logger.warning(
+                        "Missing required columns for %s, skipping DB save", symbol
+                    )
                     continue
                 
-                # Check if there are actually new rows to save
-                with get_db_session() as session:
-                    latest = (
-                        session.query(HistoricData.timestamp)
-                        .filter_by(symbol=symbol)
-                        .order_by(HistoricData.timestamp.desc())
-                        .first()
-                    )
-                    if latest:
-                        latest_ts = ensure_utc_timestamp(pd.Timestamp(latest[0]))
-                        
-                        # Filter to only rows newer than latest in DB
-                        df_timestamps = ensure_utc_series(symbol_df["timestamp"].copy())
-                        
-                        new_rows = symbol_df[df_timestamps > latest_ts]
-                        if new_rows.empty:
-                            # No new rows, skip saving
-                            continue
-                        # Only save new rows
-                        self.add_pd_df_to_db(new_rows)
-                    else:
-                        # No existing data, save all rows
-                        self.add_pd_df_to_db(symbol_df)
+                # Delegate duplicate / "only new rows" filtering + DB interaction
+                # to add_pd_df_to_db(), which already:
+                # - looks up the latest timestamp for the symbol
+                # - filters to strictly newer rows
+                # - uses a single get_db_session() context
+                self.add_pd_df_to_db(symbol_df)
         
         return symbol_data
     
@@ -523,38 +544,43 @@ class DataService:
         validate_dataframe_columns(df)
         print("Adding only missing DataFrame rows to DB")
         symbol = df["symbol"].iloc[0]
-        with get_db_session() as session:
-            # Step 1: Get latest timestamp for symbol
-            latest = (
-                session.query(HistoricData.timestamp)
-                .filter_by(symbol=symbol)
-                .order_by(HistoricData.timestamp.desc())
-                .first()
-            )
-            if latest:
-                latest_ts = ensure_utc_timestamp(pd.Timestamp(latest[0]))
-                
-                # Ensure DataFrame timestamps are also timezone-aware (UTC)
-                df_timestamps = ensure_utc_series(df["timestamp"].copy())
-                
-                # Step 2: Filter DataFrame to only new rows
-                df_new = df[df_timestamps > latest_ts]
-            else:
-                df_new = df
-            print(f"Rows to insert: {len(df_new)}")
-            # Step 3: Insert only missing rows
-            for _, row in df_new.iterrows():
-                hd = HistoricData(
-                    symbol=row["symbol"],
-                    timestamp=row["timestamp"],
-                    open=float(row["open"]),
-                    high=float(row["high"]),
-                    low=float(row["low"]),
-                    close=float(row["close"]),
-                    volume=float(row["volume"]),
-                )
-                session.merge(hd)
-            # Context manager will commit automatically
+
+        # Ensure timestamps are timezone-aware (UTC)
+        df = df.copy()
+        df["timestamp"] = ensure_utc_series(pd.to_datetime(df["timestamp"]))
+
+        # Step 1: Get latest timestamp for symbol (if any) via repository
+        latest_ts_raw = self._repo.get_latest_timestamp(symbol)
+        if latest_ts_raw is not None:
+            latest_ts = ensure_utc_timestamp(pd.Timestamp(latest_ts_raw))
+            # Step 2: Filter DataFrame to only rows strictly newer than latest in DB
+            df_new = df[df["timestamp"] > latest_ts]
+        else:
+            df_new = df
+
+        if df_new.empty:
+            print("Rows to insert: 0")
+            return
+
+        # Drop any duplicate timestamps within this batch
+        df_new = df_new.drop_duplicates(subset=["symbol", "timestamp"], keep="last")
+
+        print(f"Rows to insert: {len(df_new)}")
+
+        # Step 3: Insert with ON CONFLICT DO NOTHING via repository
+        rows = [
+            {
+                "symbol": row["symbol"],
+                "timestamp": row["timestamp"],
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            }
+            for _, row in df_new.iterrows()
+        ]
+        self._repo.bulk_insert_ohlcv(rows)
     
     def get_latest_price(self, symbol: str, cached_data: Optional[pd.DataFrame] = None) -> float:
         """

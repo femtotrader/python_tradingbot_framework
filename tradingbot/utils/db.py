@@ -278,76 +278,36 @@ Base.metadata.create_all(engine)
 
 
 @contextmanager
-def get_db_session(max_retries: int = 3, retry_delay: float = 1.0) -> Generator[Session, None, None]:
+def get_db_session() -> Generator[Session, None, None]:
     """
-    Context manager for database sessions with retry logic.
+    Simple context manager for database sessions.
     
     Ensures proper session cleanup and rollback on exceptions.
-    Automatically retries on transient connection errors.
-    
-    Args:
-        max_retries: Maximum number of retry attempts (default: 3)
-        retry_delay: Initial delay between retries in seconds (default: 1.0)
+    NOTE: We intentionally avoid internal retry loops here because a
+    @contextmanager generator must yield exactly once; retry logic is
+    better handled at call sites if needed.
     
     Usage:
         with get_db_session() as session:
             # Use session here
             session.query(Bot).all()
     """
-    session = None
-    last_exception = None
-    
-    for attempt in range(max_retries):
-        try:
-            session = SessionLocal()
-            yield session
-            session.commit()
-            return  # Success, exit retry loop
-        except (OperationalError, SQLAlchemyError) as e:
-            # These are potentially transient errors that might benefit from retry
-            if session:
-                try:
-                    session.rollback()
-                except Exception:
-                    pass  # Ignore rollback errors during retry
-                finally:
-                    try:
-                        session.close()
-                    except Exception:
-                        pass  # Ignore close errors during retry
-            
-            last_exception = e
-            is_last_attempt = attempt == max_retries - 1
-            
-            if is_last_attempt:
-                logger.error(
-                    f"Database error after {max_retries} attempts: "
-                    f"{type(e).__name__}: {e}"
-                )
-                raise
-            else:
-                # Exponential backoff: delay increases with each retry
-                delay = retry_delay * (2 ** attempt)
-                logger.warning(
-                    f"Database error (attempt {attempt + 1}/{max_retries}): "
-                    f"{type(e).__name__}: {e}. Retrying in {delay:.2f}s..."
-                )
-                time.sleep(delay)
-        except Exception as e:
-            # Non-retryable errors - close session and raise immediately
-            if session:
-                try:
-                    session.rollback()
-                except Exception:
-                    pass
-                finally:
-                    try:
-                        session.close()
-                    except Exception:
-                        pass
-            logger.error(f"Unexpected error in database session: {type(e).__name__}: {e}")
-            raise
-    
-    # Should never reach here, but just in case
-    if last_exception:
-        raise last_exception
+    session: Session | None = None
+    try:
+        session = SessionLocal()
+        yield session
+        session.commit()
+    except Exception as e:
+        if session:
+            try:
+                session.rollback()
+            except Exception:
+                pass
+        logger.error(f"Unexpected error in database session: {type(e).__name__}: {e}")
+        raise
+    finally:
+        if session:
+            try:
+                session.close()
+            except Exception:
+                pass

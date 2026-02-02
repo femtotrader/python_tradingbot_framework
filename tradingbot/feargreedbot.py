@@ -1,5 +1,5 @@
-import fear_and_greed
-from utils.botclass import Bot
+from utils.core import Bot
+from utils.portfolio import get_fear_greed_index
 
 
 class FearGreedBotQQQ(Bot):
@@ -77,12 +77,11 @@ class FearGreedBotQQQ(Bot):
         return 0
 
 
-indexvalue = fear_and_greed.get().value
+indexvalue = get_fear_greed_index()
 
-fgb = FearGreedBotQQQ(indexvalue)
+fgb = FearGreedBotQQQ(indexvalue or 50)
 # fgb.local_development()
 fgb.run()
-
-fgbi = FearGreedBotQQQ(indexvalue, name="FearGreedBotQQQInverse")
+fgbi = FearGreedBotQQQ(indexvalue or 50, name="FearGreedBotQQQInverse")
 # fgbi.local_development()
 fgbi.run()

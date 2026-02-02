@@ -1,15 +1,5 @@
-from pypfopt import EfficientFrontier, expected_returns, risk_models
-from utils.botclass import Bot
-
-TRADEABLE = [
-    "GLD", "AAPL", "MSFT", "GOOG", "TSLA", "AMD", "AMZN", "DG", "KDP", "LLY",
-    "NOC", "NVDA", "PGR", "TEAM", "UNH", "WM", "URTH", "IWDA.AS", "EEM",
-    "XAIX.DE", "BTEC.L", "L0CK.DE", "2B76.DE", "W1TA.DE", "RENW.DE", "BNXG.DE",
-    "BTC-USD", "ETH-USD", "AVAX-USD", "TMF", "FAS", "TQQQ", "QQQ", "UUP",
-    "META", "PYPL", "ADBE", "UPRO", "BSV", "SQQQ", "NTSX", "DBMF", "VDE", "VNQ",
-    "VHT", "VFH", "VOX", "VPU", "VAW", "VGT", "VIS", "VDC", "VCR", "VLUE",
-    "FNDX", "VTV", "RWL", "DBA", "SHV", "DBB", "DBO", "URA", "WOOD", "DBE"
-]
+from utils.core import Bot
+from utils.portfolio import TRADEABLE, sharpe_compute_weights
 
 
 class SharpePortfolioOptWeeklyBot(Bot):
@@ -53,49 +43,20 @@ class SharpePortfolioOptWeeklyBot(Bot):
                 return 0
             
             print(f"Calculating optimal portfolio weights for {len(df.columns)} assets...")
-            
-            # Calculate expected returns and sample covariance
-            mu = expected_returns.mean_historical_return(df)
-            S = risk_models.sample_cov(df)
-            
-            # Optimize for maximal Sharpe ratio with 20% max weight per asset
-            ef = EfficientFrontier(mu, S, weight_bounds=(0, 0.2))
-            ef.max_sharpe()
-            cleaned_weights = ef.clean_weights()
-            
-            # Get portfolio performance metrics
-            exp_return, volatility, sharpe = ef.portfolio_performance(verbose=True)
-            
-            # Sort dict descending by value and remove zero weights
-            cleaned_weights = dict(sorted(cleaned_weights.items(), key=lambda item: item[1], reverse=True))
-            cleaned_weights = {k: v for k, v in cleaned_weights.items() if v != 0}
-            
-            if not cleaned_weights:
+            weights = sharpe_compute_weights(df)
+            if not weights:
                 print("Warning: Optimization returned no non-zero weights")
                 return 0
-            
-            print(f"Optimized portfolio contains {len(cleaned_weights)} assets")
-            print(f"Expected return: {exp_return:.2%}, Volatility: {volatility:.2%}, Sharpe: {sharpe:.2f}")
-            
-            # Normalize weights to sum to 1.0 (required by rebalancePortfolio)
-            total_weight = sum(cleaned_weights.values())
-            if total_weight == 0:
-                print("Warning: Total weight is zero, cannot rebalance")
-                return 0
-            
-            normalized_weights = {k: v / total_weight for k, v in cleaned_weights.items()}
-            
-            # Add USD weight if needed to make weights sum to 1.0
-            # For now, we'll assume all cash should be invested (USD weight = 0)
-            # If you want to keep some cash, you can add: normalized_weights["USD"] = 0.1
-            # and renormalize the other weights accordingly
-            
+
+            print(f"Optimized portfolio contains {len(weights)} assets")
             print("Rebalancing portfolio to target weights...")
-            print(f"Top 5 holdings: {dict(list(sorted(normalized_weights.items(), key=lambda x: x[1], reverse=True))[:5])}")
-            
+            print(
+                f"Top 5 holdings: {dict(list(sorted(weights.items(), key=lambda x: x[1], reverse=True))[:5])}"
+            )
+
             # Rebalance portfolio using base class method with onlyOver50USD=True
             # This will filter out assets with target value <= $50 and redistribute weights
-            self.rebalancePortfolio(normalized_weights, onlyOver50USD=True)
+            self.rebalancePortfolio(weights, onlyOver50USD=True)
             
             print("Weekly rebalancing completed successfully")
             return 0

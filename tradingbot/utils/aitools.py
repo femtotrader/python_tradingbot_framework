@@ -18,12 +18,24 @@ Extensibility: Subclasses can override Bot.get_ai_tools() to add custom tools; r
 them automatically. run_ai_with_tools() accepts extra_tools= and optional tool_names= to
 whitelist which base tools to include.
 """
-
 from __future__ import annotations
 
 import logging
 import os
 from typing import TYPE_CHECKING, Callable, List, Optional
+
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+
+from .db import (
+    StockEarnings,
+    StockInsiderTrade,
+    StockNews,
+    Trade,
+    get_db_session,
+)
+from .portfolio_worth_calculator import calculate_portfolio_worth
 
 logger = logging.getLogger(__name__)
 
@@ -39,18 +51,6 @@ if _level in ("DEBUG", "INFO", "WARNING", "ERROR"):
         logger.addHandler(_handler)
         logger.propagate = False  # we handle it ourselves so root doesn't filter
 
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
-
-from .db import (
-    StockEarnings,
-    StockInsiderTrade,
-    StockNews,
-    Trade,
-    get_db_session,
-)
-from .portfolio_worth_calculator import calculate_portfolio_worth
 
 if TYPE_CHECKING:
     from .botclass import Bot

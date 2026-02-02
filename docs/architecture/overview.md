@@ -24,6 +24,8 @@ The Trading Bot System consists of several key components:
 - **Backtesting**: Simulate strategies on historical data
 - **Hyperparameter Tuning**: Optimize bot parameters
 - **Helpers**: Timezone handling and data validation
+- **Utils Subpackages**: Domain-focused utilities grouped under `utils.core`, `utils.data`,
+  `utils.portfolio`, and `utils.ai` (see `utils-layout.md` for details)
 
 ## Data Flow
 

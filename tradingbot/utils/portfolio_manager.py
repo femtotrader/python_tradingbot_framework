@@ -2,12 +2,16 @@
 
 from typing import Optional
 
+import logging
+
 import pandas as pd
 
 from .bot_repository import BotRepository
-from .constants import MIN_ASSET_VALUE_USD
 from .data_service import DataService
 from .db import Bot as BotModel
+from .settings import PORTFOLIO_CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 class PortfolioManager:
@@ -62,8 +66,8 @@ class PortfolioManager:
             price=price,
             is_buy=True,
         )
-        print(
-            f"Buying {quantity} of {symbol} at {price} for cost {quantity_usd}"
+        logger.info(
+            "Buying %.6f of %s at %.4f for cost %.2f", quantity, symbol, price, quantity_usd
         )
     
     def sell(self, symbol: str, quantity_usd: float = -1, cached_data: Optional[pd.DataFrame] = None) -> None:
@@ -105,8 +109,12 @@ class PortfolioManager:
             is_buy=False,
             profit=profit,
         )
-        print(
-            f"Selling {quantity} of {symbol} at {current_price} for profit {profit}"
+        logger.info(
+            "Selling %.6f of %s at %.4f for proceeds %.2f",
+            quantity,
+            symbol,
+            current_price,
+            profit,
         )
     
     def rebalance_portfolio(self, target_portfolio: dict[str, float], only_over_50_usd: bool = False) -> None:
@@ -155,16 +163,16 @@ class PortfolioManager:
                     current_values[symbol] = value
                     total_portfolio_value += value
                 else:
-                    print(f"Warning: Could not get price for {symbol}, skipping")
+                    logger.warning("Could not get price for %s, skipping", symbol)
                     # Skip this asset for rebalancing
                     continue
         
         # Add USD to current_values for easier calculation
         current_values["USD"] = current_usd
         
-        # Step 2.5: Filter out assets with target value <= $50 if requested
+        # Step 2.5: Filter out assets with target value <= configured minimum if requested
         if only_over_50_usd:
-            print(f"Total portfolio value: ${total_portfolio_value:,.2f}")
+            logger.info("Total portfolio value: $%,.2f", total_portfolio_value)
             
             # Get prices for symbols in targetPortfolio that might not be in current portfolio
             target_symbols_to_price = [
@@ -185,15 +193,20 @@ class PortfolioManager:
                     continue
                 
                 target_value = total_portfolio_value * weight
-                if target_value > MIN_ASSET_VALUE_USD:
+                if target_value > PORTFOLIO_CONFIG.min_asset_value_usd:
                     filtered_weights[symbol] = weight
                 else:
                     excluded_weights[symbol] = weight
             
             if excluded_weights:
                 excluded_total_weight = sum(excluded_weights.values())
-                print(f"Excluding {len(excluded_weights)} assets with target value <= ${MIN_ASSET_VALUE_USD}: {list(excluded_weights.keys())}")
-                print(f"Total excluded weight: {excluded_total_weight:.2%}")
+                logger.info(
+                    "Excluding %d assets with target value <= $%.2f: %s",
+                    len(excluded_weights),
+                    PORTFOLIO_CONFIG.min_asset_value_usd,
+                    list(excluded_weights.keys()),
+                )
+                logger.info("Total excluded weight: %.2f%%", excluded_total_weight * 100)
                 
                 # Get non-USD assets for redistribution
                 non_usd_filtered = {k: v for k, v in filtered_weights.items() if k != "USD"}
@@ -213,7 +226,10 @@ class PortfolioManager:
                 else:
                     raise ValueError("All assets were excluded (all target values <= $50), cannot rebalance")
             
-            print(f"After filtering, portfolio contains {len([k for k in target_portfolio.keys() if k != 'USD'])} assets")
+            logger.info(
+                "After filtering, portfolio contains %d assets",
+                len([k for k in target_portfolio.keys() if k != "USD"]),
+            )
         
         # Step 3: Calculate target values
         target_values = {}
@@ -257,14 +273,20 @@ class PortfolioManager:
         if total_buy_needed > (initial_cash + total_sell_expected):
             cash_shortfall = total_buy_needed - (initial_cash + total_sell_expected)
             if total_sell_expected > 0:
-                print(f"Warning: Need ${cash_shortfall:.2f} more cash. Will sell proportionally more from over-weighted positions.")
+                logger.warning(
+                    "Need $%.2f more cash. Will sell proportionally more from over-weighted positions.",
+                    cash_shortfall,
+                )
                 # Scale up sells proportionally to cover the shortfall
                 scale_factor = (total_buy_needed - initial_cash) / total_sell_expected
                 trades_to_sell = {symbol: amount * scale_factor for symbol, amount in trades_to_sell.items()}
             else:
                 # No sells possible, but we need cash - this means portfolio is fully invested
                 # and target includes new assets. We can't rebalance without selling existing assets.
-                print(f"Warning: Need ${cash_shortfall:.2f} to buy new assets, but no over-weighted positions to sell. Skipping buys.")
+                logger.warning(
+                    "Need $%.2f to buy new assets, but no over-weighted positions to sell. Skipping buys.",
+                    cash_shortfall,
+                )
                 trades_to_buy = {}  # Clear buys since we can't afford them
         
         # Sell phase - execute all sells first to free up cash
@@ -272,7 +294,7 @@ class PortfolioManager:
             try:
                 self.sell(symbol, quantity_usd=usd_amount)
             except Exception as e:
-                print(f"Error selling {symbol}: {e}")
+                logger.error("Error selling %s: %s", symbol, e)
                 # Continue with other trades
         
         # Refresh bot after all sells to get latest cash amount
@@ -284,21 +306,29 @@ class PortfolioManager:
             self._refresh_bot()
             available_cash = self.bot.portfolio.get("USD", 0)
             if available_cash <= 0:
-                print(f"Skipping all remaining buys: no cash available (${available_cash:.2f})")
+                logger.warning(
+                    "Skipping all remaining buys: no cash available ($%.2f)",
+                    available_cash,
+                )
                 break
             
             if available_cash < usd_amount:
-                print(f"Skipping buy of {symbol}: insufficient cash (available: ${available_cash:.2f}, needed: ${usd_amount:.2f})")
+                logger.warning(
+                    "Skipping buy of %s: insufficient cash (available: $%.2f, needed: $%.2f)",
+                    symbol,
+                    available_cash,
+                    usd_amount,
+                )
                 continue
             
             try:
                 self.buy(symbol, quantity_usd=usd_amount)
             except AssertionError as e:
                 # AssertionError means the buy method's internal check failed
-                print(f"Error buying {symbol}: {e}")
+                logger.error("Error buying %s: %s", symbol, e)
                 continue
             except Exception as e:
-                print(f"Error buying {symbol}: {e}")
+                logger.error("Error buying %s: %s", symbol, e)
                 # Continue with other trades
         
         # USD will naturally be correct after all trades execute
@@ -322,13 +352,20 @@ class PortfolioManager:
                     price = final_prices[symbol]
                     final_total_value += quantity * price
                 else:
-                    print(f"Warning: Could not get price for {symbol} during final calculation")
+                    logger.warning(
+                        "Could not get price for %s during final calculation", symbol
+                    )
         
         target_usd_weight = target_portfolio.get("USD", 0)
         target_usd = final_total_value * target_usd_weight
         actual_usd_weight = final_usd / final_total_value if final_total_value > 0 else 0
         
         self.bot_repository.update_bot(self.bot)
-        print(f"Portfolio rebalanced. Final USD: {final_usd:.2f} "
-              f"(target: {target_usd:.2f}, actual weight: {actual_usd_weight:.1%}, target weight: {target_usd_weight:.1%})")
+        logger.info(
+            "Portfolio rebalanced. Final USD: %.2f (target: %.2f, actual weight: %.1f%%, target weight: %.1f%%)",
+            final_usd,
+            target_usd,
+            actual_usd_weight * 100 if final_total_value > 0 else 0,
+            target_usd_weight * 100,
+        )
 

@@ -4,7 +4,8 @@ import json
 from typing import Optional
 
 from langchain_core.tools import tool
-from utils.botclass import Bot
+from utils.core import Bot
+from utils.portfolio import TRADEABLE
 
 
 def _sanity_check_weights_cheap_llm(bot: "Bot", weights: dict) -> bool:
@@ -33,18 +34,6 @@ def _sanity_check_weights_cheap_llm(bot: "Bot", weights: dict) -> bool:
     except Exception as e:
         print(f"Sanity check failed with error: {e}")
         return False
-
-
-# Same tradeable universe as SharpePortfolioOptWeeklyBot
-TRADEABLE = [
-    "GLD", "AAPL", "MSFT", "GOOG", "TSLA", "AMD", "AMZN", "DG", "KDP", "LLY",
-    "NOC", "NVDA", "PGR", "TEAM", "UNH", "WM", "URTH", "IWDA.AS", "EEM",
-    "XAIX.DE", "BTEC.L", "L0CK.DE", "2B76.DE", "W1TA.DE", "RENW.DE", "BNXG.DE",
-    "BTC-USD", "ETH-USD", "AVAX-USD", "TMF", "FAS", "TQQQ", "QQQ", "UUP",
-    "META", "PYPL", "ADBE", "UPRO", "BSV", "SQQQ", "NTSX", "DBMF", "VDE", "VNQ",
-    "VHT", "VFH", "VOX", "VPU", "VAW", "VGT", "VIS", "VDC", "VCR", "VLUE",
-    "FNDX", "VTV", "RWL", "DBA", "SHV", "DBB", "DBO", "URA", "WOOD", "DBE",
-]
 
 
 class DeepSeekToolBot(Bot):

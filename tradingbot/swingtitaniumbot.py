@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.signal import find_peaks
 from sklearn.linear_model import LinearRegression, RANSACRegressor
-from utils.botclass import Bot
+from utils.core import Bot
 
 
 class SwingTitaniumBot(Bot):
