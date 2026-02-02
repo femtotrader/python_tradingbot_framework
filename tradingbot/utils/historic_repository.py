@@ -62,11 +62,11 @@ class HistoricDataRepository:
             query = query.order_by(HistoricData.timestamp)
             results = query.all()
 
-        if not results:
-            return pd.DataFrame()
+            if not results:
+                return pd.DataFrame()
 
-        data = pd.DataFrame(
-            [
+            # Build row dicts while session is open to avoid DetachedInstanceError
+            rows = [
                 {
                     "symbol": r.symbol,
                     "timestamp": r.timestamp,
@@ -78,10 +78,8 @@ class HistoricDataRepository:
                 }
                 for r in results
             ]
-        )
-        # Leave timestamp as-is (naive/aware) – caller is responsible for any
-        # timezone normalization / conversion.
-        return data
+
+        return pd.DataFrame(rows)
 
     def bulk_insert_ohlcv(self, rows: Iterable[dict]) -> None:
         """Bulk insert OHLCV rows using ON CONFLICT DO NOTHING semantics.

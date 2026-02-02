@@ -1,6 +1,7 @@
 """Hyperparameter tuning functionality for trading bots."""
 
 import os
+import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import product
 from typing import Any, Dict, List, Optional, Type
@@ -98,6 +99,7 @@ def tune_hyperparameters(
     initial_capital: float = 10000.0,
     verbose: bool = True,
     n_jobs: Optional[int] = None,
+    param_sample_ratio: float = 1.0,
 ) -> Dict[str, Any]:
     """
     Tune hyperparameters for a trading bot using grid search.
@@ -113,6 +115,8 @@ def tune_hyperparameters(
         verbose: If True, print progress information (default: True)
         n_jobs: Number of parallel jobs to run. If None, uses number of CPU cores.
                 Set to 1 for sequential execution (default: None = auto-detect)
+        param_sample_ratio: Fraction of parameter combinations to test, in [0.0, 1.0].
+                           1.0 = test all (default). e.g. 0.2 = randomly test 20% of the grid.
     
     Returns:
         Dictionary with keys:
@@ -158,9 +162,23 @@ def tune_hyperparameters(
     param_names = list(param_grid.keys())
     param_values = list(param_grid.values())
     combinations = list(product(*param_values))
-    
     total_combinations = len(combinations)
-    
+
+    # Optionally sample a random subset of combinations
+    if param_sample_ratio < 1.0:
+        if param_sample_ratio <= 0.0:
+            raise ValueError("param_sample_ratio must be in (0.0, 1.0]")
+        original_total = total_combinations
+        sample_size = max(1, int(original_total * param_sample_ratio))
+        combinations = random.sample(combinations, sample_size)
+        total_combinations = len(combinations)
+        if verbose:
+            print(
+                f"Warning: Only testing a random subset: {total_combinations} of "
+                f"{original_total} parameter combinations ({param_sample_ratio:.0%})."
+            )
+            print()
+
     # Determine number of parallel jobs
     if n_jobs is None:
         n_jobs = os.cpu_count() or 1
@@ -311,7 +329,10 @@ def tune_hyperparameters(
         progress_bar.close()
     
     if best_params is None:
-        raise ValueError("No valid parameter combinations found. Check your param_grid and bot_class.")
+        raise ValueError(
+            f"No valid parameter combinations found (all {total_combinations} failed). "
+            "Check your param_grid and bot_class; run with n_jobs=1 and verbose=True to see per-combination errors."
+        )
     
     if verbose:
         print("=" * 60)

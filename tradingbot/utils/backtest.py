@@ -93,7 +93,8 @@ def backtest_bot(
     
     Returns:
         Dictionary with keys:
-        - yearly_return: Annualized return as decimal (e.g., 0.15 for 15%)
+        - yearly_return: Strategy return over backtest period as decimal (e.g., 0.15 for 15%)
+        - buy_hold_return: Buy-and-hold return over same period as decimal
         - sharpe_ratio: Sharpe ratio (annualized, assuming 252 trading days)
         - nrtrades: Total number of trades executed (buy + sell)
         - maxdrawdown: Maximum drawdown as decimal (e.g., 0.25 for 25%)
@@ -274,10 +275,24 @@ def backtest_bot(
         # Handle edge cases
         if not np.isfinite(maxdrawdown):
             maxdrawdown = 0.0
-    
+
+    # Buy-and-hold return (same period as backtest)
+    close = data["close"].dropna()
+    if len(close) < 2:
+        buy_hold_return = 0.0
+    else:
+        first_close = float(close.iloc[0])
+        last_close = float(close.iloc[-1])
+        if first_close > 0 and np.isfinite(first_close) and np.isfinite(last_close):
+            buy_hold_return = (last_close - first_close) / first_close
+        else:
+            buy_hold_return = 0.0
+        buy_hold_return = float(buy_hold_return)
+
     return {
         "yearly_return": float(yearly_return),
         "sharpe_ratio": float(sharpe_ratio),
         "nrtrades": int(nrtrades),
         "maxdrawdown": float(maxdrawdown),
+        "buy_hold_return": buy_hold_return,
     }

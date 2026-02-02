@@ -173,3 +173,6 @@ bots:
 
   - name: earningsinsidertiltbot
     schedule: "30 20 * * 3"  # Weekly on Wednesday at 8:30 PM
+
+  - name: ta_regime_bot
+    schedule: "20 17 * * 4"  # weekly 5:20 PM, Thursday

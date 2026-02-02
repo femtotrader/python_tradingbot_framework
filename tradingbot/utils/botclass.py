@@ -581,6 +581,7 @@ class Bot:
         objective: str = "sharpe_ratio",
         initial_capital: float = 10000.0,
         n_jobs: Optional[int] = None,
+        param_sample_ratio: float = 1.0,
     ) -> Dict[str, Any]:
         """
         Local-only helper: run hyperparameter optimization for this bot's class.
@@ -593,6 +594,7 @@ class Bot:
             objective: Metric to maximize ("sharpe_ratio" or "yearly_return")
             initial_capital: Starting capital for backtests
             n_jobs: Number of parallel jobs (None = auto-detect)
+            param_sample_ratio: Fraction of param combinations to test (0.0–1.0). 1.0 = all (default).
         
         Returns:
             Full optimization results dictionary
@@ -621,6 +623,7 @@ class Bot:
             initial_capital=initial_capital,
             verbose=True,
             n_jobs=n_jobs,
+            param_sample_ratio=param_sample_ratio,
         )
         
         print("\n" + "=" * 60)
@@ -647,6 +650,8 @@ class Bot:
         results = backtest_bot(self, initial_capital=initial_capital)
         print(f"\n--- Backtest Results: {self.bot_name} ---")
         print(f"Yearly Return: {results['yearly_return']:.2%}")
+        print(f"Buy & Hold Return: {results['buy_hold_return']:.2%}")
+        print(f"Outperformance vs B&H: {(results['yearly_return'] - results['buy_hold_return']):+.2%}")
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Number of Trades: {results['nrtrades']}")
         print(f"Max Drawdown: {results['maxdrawdown']:.2%}")
@@ -658,6 +663,7 @@ class Bot:
         objective: str = "sharpe_ratio",
         initial_capital: float = 10000.0,
         n_jobs: Optional[int] = None,
+        param_sample_ratio: float = 1.0,
     ) -> Dict[str, Any]:
         """
         Convenience wrapper for the typical local development workflow:
@@ -672,6 +678,8 @@ class Bot:
             objective: Metric to maximize ("sharpe_ratio" or "yearly_return")
             initial_capital: Starting capital for backtests
             n_jobs: Number of parallel jobs (None = auto-detect)
+            param_sample_ratio: Fraction of param combinations to test (0.0–1.0). 1.0 = all (default).
+                               e.g. 0.2 = randomly test 20% of the grid.
         
         Returns:
             Optimization results dictionary with 'best_params' and performance metrics
@@ -689,13 +697,18 @@ class Bot:
             objective=objective,
             initial_capital=initial_capital,
             n_jobs=n_jobs,
+            param_sample_ratio=param_sample_ratio,
         )
         
         # Step 2: Backtest with best parameters
         print("\n" + "=" * 60)
         print("Backtesting with best parameters...")
         print("=" * 60)
-        best_bot = self.__class__(**opt_results["best_params"])
+        best_params = opt_results["best_params"]
+        for key, value in best_params.items():
+            print(f"  {key}: {value}")
+        print()
+        best_bot = self.__class__(**best_params)
         best_bot.local_backtest(initial_capital=initial_capital)
         
         return opt_results

@@ -79,6 +79,14 @@ AI-driven portfolio research and rebalancing with tools. The main LLM uses tools
 
 **Pattern**: Override `get_ai_tools()` for custom tools; use main LLM for tool flow, cheap LLM for output validation and fallback
 
+## ta_regime_bot.py (TARegimeAdaptiveBot)
+
+Single-asset bot that uses **only historic OHLCV and TA** (no Fear & Greed). It classifies regime as **trend** vs **mean reversion** via a Hurst-style proxy (lag-1 autocorrelation of returns), then applies ADX/MACD/EMA in trend regime and RSI/Bollinger BBP (and optional z-score) in mean-reversion regime. All decision logic lives in `utils.ta_regime`; the bot only fetches data and delegates.
+
+**Pattern**: Minimal bot; reusable logic in `utils.ta_regime`; `decisionFunction(row)` calls `ta_regime_decision(row, self.data, **self._ta_params)`.
+
+For the mathematical and quant concepts (Hurst, R/S, variance ratio, z-score, Hilbert/Ehlers, entropy) and source links, see **[TA Regime Bot: Mathematical and Quant Concepts](ta-regime-bot.md)**.
+
 ## Learning from Examples
 
 Each example demonstrates:
