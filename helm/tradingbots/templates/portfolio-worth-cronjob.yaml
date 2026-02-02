@@ -35,12 +35,34 @@ spec:
             resources:
               {{- toYaml $.Values.resources | nindent 14 }}
             env:
+            {{- if $.Values.postgresql.clusterConnection }}
+            - name: POSTGRES_HOST
+              value: {{ $.Values.postgresql.clusterConnection.host | quote }}
+            - name: POSTGRES_PORT
+              value: {{ $.Values.postgresql.clusterConnection.port | quote }}
+            - name: POSTGRES_USER
+              value: {{ $.Values.postgresql.clusterConnection.user | quote }}
+            - name: POSTGRES_DATABASE
+              value: {{ $.Values.postgresql.clusterConnection.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secretName }}
+                  key: POSTGRES_PASSWORD
+            {{- end }}
             {{- range $.Values.env }}
+            {{- if and $.Values.postgresql.clusterConnection (or (eq .name "POSTGRES_URI") (eq .name "POSTGRES_PASSWORD")) }}
+            {{- else }}
             - name: {{ .name }}
+            {{- if .value }}
+              value: {{ .value | quote }}
+            {{- else if .valueFrom }}
               valueFrom:
                 secretKeyRef:
                   name: {{ $.Values.secretName }}
                   key: {{ .valueFrom.secretKeyRef.key }}
+            {{- end }}
+            {{- end }}
             {{- end }}
           restartPolicy: OnFailure
 
