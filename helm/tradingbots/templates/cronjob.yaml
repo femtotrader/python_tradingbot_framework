@@ -55,14 +55,38 @@ spec:
             # CPU and memory limits from values.yaml
             resources:
               {{- toYaml $.Values.resources | nindent 14 }}
-            # Environment variables (e.g., POSTGRES_URI) from Kubernetes secrets
+            # Environment variables: cluster connection from values when set, else from secret/literal
             env:
+            {{- if $.Values.postgresql.clusterConnection }}
+            # Cluster-internal DB: route from values, password from secret (overrides POSTGRES_URI)
+            - name: POSTGRES_HOST
+              value: {{ $.Values.postgresql.clusterConnection.host | quote }}
+            - name: POSTGRES_PORT
+              value: {{ $.Values.postgresql.clusterConnection.port | quote }}
+            - name: POSTGRES_USER
+              value: {{ $.Values.postgresql.clusterConnection.user | quote }}
+            - name: POSTGRES_DATABASE
+              value: {{ $.Values.postgresql.clusterConnection.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secretName }}
+                  key: POSTGRES_PASSWORD
+            {{- end }}
             {{- range $.Values.env }}
+            {{- if and $.Values.postgresql.clusterConnection (or (eq .name "POSTGRES_URI") (eq .name "POSTGRES_PASSWORD")) }}
+            {{- /* Skip POSTGRES_URI/POSTGRES_PASSWORD when using cluster connection */}}
+            {{- else }}
             - name: {{ .name }}
+            {{- if .value }}
+              value: {{ .value | quote }}
+            {{- else if .valueFrom }}
               valueFrom:
                 secretKeyRef:
                   name: {{ $.Values.secretName }}
                   key: {{ .valueFrom.secretKeyRef.key }}
+            {{- end }}
+            {{- end }}
             {{- end }}
           # Restart container if it fails (but not if job completes successfully)
           restartPolicy: OnFailure

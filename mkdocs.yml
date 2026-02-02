@@ -80,6 +80,7 @@ nav:
       - DataService: api/data-service.md
       - PortfolioManager: api/portfolio-manager.md
       - BotRepository: api/bot-repository.md
+      - AITools: api/aitools.md
     - Utilities:
       - Backtesting: api/backtest.md
       - Hyperparameter Tuning: api/hyperparameter-tuning.md
@@ -93,6 +94,7 @@ nav:
   - Guides:
     - Technical Analysis: guides/technical-analysis.md
     - Portfolio Management: guides/portfolio-management.md
+    - AI Tools: guides/ai-tools.md
     - Local Development: guides/local-development.md
   - Examples:
     - Example Bots: examples/example-bots.md

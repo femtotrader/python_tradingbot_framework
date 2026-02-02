@@ -73,6 +73,12 @@ AI-driven portfolio rebalancing.
 
 **Pattern**: Reads decisions from external database and rebalances
 
+## deepseektoolbot.py
+
+AI-driven portfolio research and rebalancing with tools. The main LLM uses tools (market data, news, earnings, insider trades, portfolio, recent trades) to research symbols and submits target weights via a custom `submit_portfolio_weights` tool. The cheap LLM then sanity-checks the submitted weights; if it rejects them, the bot retries once with the main LLM. Requires `OPENROUTER_API_KEY`.
+
+**Pattern**: Override `get_ai_tools()` for custom tools; use main LLM for tool flow, cheap LLM for output validation and fallback
+
 ## Learning from Examples
 
 Each example demonstrates:

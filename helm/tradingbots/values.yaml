@@ -53,12 +53,29 @@ cronjob:
   ttlSecondsAfterFinished: 3600
 
 # Environment variables injected into all bot containers
-# Values are read from Kubernetes secrets (secret name is defined in .Values.secretName)
+# When postgresql.clusterConnection is set, POSTGRES_HOST/PORT/USER/DATABASE come from values
+# and POSTGRES_PASSWORD from secret (POSTGRES_URI is not set; app builds it in-cluster).
+# Otherwise POSTGRES_URI is read from secret (e.g. localhost for local dev).
 env:
   - name: POSTGRES_URI
     valueFrom:
       secretKeyRef:
-        key: POSTGRES_URI  # Key in secret containing connection string
+        key: POSTGRES_URI  # Used when clusterConnection is not set (e.g. local)
+
+  - name: POSTGRES_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        key: POSTGRES_PASSWORD  # Required when clusterConnection is set (from .env)
+
+  # LangSmith tracing (EU). Add LANGSMITH_API_KEY to your secret (e.g. from .env).
+  - name: LANGSMITH_API_KEY
+    valueFrom:
+      secretKeyRef:
+        key: LANGSMITH_API_KEY
+  - name: LANGSMITH_TRACING
+    value: "true"
+  - name: LANGSMITH_ENDPOINT
+    value: "https://eu.api.smith.langchain.com"
 
 # Web visualization dashboard settings
 visualization:
@@ -85,6 +102,13 @@ postgresql:
   service:
     name: psql-service  # Kubernetes service name
     port: 5432  # PostgreSQL port
+  # Cluster-internal connection for CronJob bots (overrides POSTGRES_URI from secret).
+  # When set, bots get POSTGRES_HOST/PORT/USER/DATABASE from here and POSTGRES_PASSWORD from secret.
+  clusterConnection:
+    host: psql-service  # K8s service name (same namespace) or FQDN
+    port: 5432
+    user: postgres
+    database: postgres
   storage:
     hostPath: /mnt/hdd/tradingbot_2025/psql/  # Persistent storage path on node
     type: DirectoryOrCreate  # Create directory if it doesn't exist
@@ -141,3 +165,5 @@ bots:
     # Runs after the execution of helm/tradingbots/templates/cronjob-ai-hedge-fund.yaml
     schedule: "10 22 * * 3"  # Weekly on Wednesday at 10:10 PM
 
+  - name: aideepseektoolbot
+    schedule: "18 18 * * 4"  #  at 6:18 PM, Thursday

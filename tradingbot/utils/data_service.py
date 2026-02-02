@@ -134,13 +134,13 @@ class DataService:
         Returns:
             DataFrame with columns: symbol, timestamp, open, high, low, close, volume
         """
-        # Check cache first
+        # Check cache first: only use if it contains data for the requested symbol
+        # (cache key is interval+period only, so cache may hold a different symbol)
         if use_cache and (interval, period) == self.datasettings and self.data is not None:
-            # Filter by symbol if data contains multiple symbols
-            if symbol in self.data["symbol"].values:
+            if "symbol" in self.data.columns and symbol in self.data["symbol"].values:
                 return self.data[self.data["symbol"] == symbol].copy()
-            return self.data
-        
+            # Cached data is for another symbol; fall through to fetch requested symbol
+
         assert symbol, "Symbol must be provided"
         
         # Calculate date range from period

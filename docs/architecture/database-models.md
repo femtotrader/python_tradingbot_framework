@@ -74,6 +74,61 @@ class PortfolioWorth(Base):
     created_at: datetime
 ```
 
+## StockNews Model
+
+News articles per symbol from yfinance (loaded daily with portfolio worth).
+
+```python
+class StockNews(Base):
+    id: int                      # Auto-increment primary key
+    symbol: str                  # Trading symbol (indexed)
+    title: str                   # Article title
+    link: str                    # Article URL
+    publisher: str               # Publisher name (nullable)
+    publisher_url: str           # Publisher URL (nullable)
+    published_at: datetime       # When the article was published (UTC)
+    related_tickers: list        # JSON array of related tickers (nullable)
+    created_at: datetime
+```
+
+**Unique constraint**: `(symbol, link)` so the same article is not stored twice for a symbol. Index on `(symbol, published_at)` for efficient queries.
+
+## StockEarnings Model
+
+Earnings dates and results per symbol from yfinance (loaded daily with portfolio worth).
+
+```python
+class StockEarnings(Base):
+    id: int                      # Auto-increment primary key
+    symbol: str                  # Trading symbol (indexed)
+    report_date: datetime        # Earnings report date
+    eps_estimate: float          # Estimated EPS (nullable)
+    reported_eps: float          # Reported EPS (nullable)
+    surprise_pct: float          # Surprise percentage (nullable)
+    fiscal_period: str           # Fiscal period if available (nullable)
+    created_at: datetime
+```
+
+**Unique constraint**: `(symbol, report_date)` to avoid duplicate earnings rows. Index on `symbol`.
+
+## StockInsiderTrade Model
+
+Insider transactions per symbol from yfinance (loaded daily with portfolio worth).
+
+```python
+class StockInsiderTrade(Base):
+    id: int                      # Auto-increment primary key
+    symbol: str                  # Trading symbol (indexed)
+    transaction_date: datetime   # Date of the transaction
+    insider_name: str            # Name of the insider (nullable)
+    transaction_type: str        # Type e.g. Purchase, Sale (nullable)
+    shares: float                # Number of shares (nullable)
+    value: float                 # Transaction value if available (nullable)
+    created_at: datetime
+```
+
+**Unique constraint**: `(symbol, transaction_date, insider_name, transaction_type, shares)`. Index on `(symbol, transaction_date)`.
+
 ## Session Management
 
 Always use the context manager:

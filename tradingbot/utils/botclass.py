@@ -26,7 +26,7 @@ Example:
             return 0  # Hold
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -451,6 +451,75 @@ class Bot:
                 # Context manager will commit automatically
             raise e
     
+    def get_ai_tools(self) -> List[Any]:
+        """
+        Return custom LangChain tools for this bot. Override in subclasses to add
+        bot-specific tools (e.g. get_tradeable_symbols, run_optimization).
+        These are merged with the base tools when calling run_ai().
+        """
+        return []
+
+    def run_ai(
+        self,
+        system_prompt: str,
+        user_message: str,
+        model: Optional[str] = None,
+        max_tool_rounds: int = 5,
+        extra_tools: Optional[List[Any]] = None,
+        tool_names: Optional[List[str]] = None,
+    ) -> str:
+        """
+        Run the AI with tools (market data, portfolio, recent trades, plus any custom tools) bound to this bot.
+        Uses the main LLM (OPENROUTER_MAIN_MODEL, default deepseek/deepseek-v3.2).
+        Pass model= to override. Merge custom tools via get_ai_tools() or extra_tools=.
+        Optional tool_names= whitelists which base tools to include. Requires OPENROUTER_API_KEY.
+        """
+        from .aitools import run_ai_with_tools
+        merged_extra = list(self.get_ai_tools()) + (extra_tools or [])
+        return run_ai_with_tools(
+            system_prompt, user_message, self,
+            model=model, max_tool_rounds=max_tool_rounds,
+            extra_tools=merged_extra if merged_extra else None,
+            tool_names=tool_names,
+        )
+
+    def run_ai_simple(
+        self,
+        system_prompt: str,
+        user_message: str,
+        model: Optional[str] = None,
+    ) -> str:
+        """
+        Run the AI for a single-turn, no-tools task (summarization, extraction,
+        classification, rewriting). Uses the cheap LLM (OPENROUTER_CHEAP_MODEL,
+        default openai/gpt-oss-120b). Use run_ai() when you need tool access.
+        """
+        from .aitools import run_ai_simple as _run_ai_simple
+        return _run_ai_simple(system_prompt, user_message, model=model)
+
+    def run_ai_simple_with_fallback(
+        self,
+        system_prompt: str,
+        user_message: str,
+        sanity_check: Optional[Callable[[str], bool]] = None,
+        fallback_to_main: bool = True,
+    ) -> str:
+        """
+        Run a simple (no-tools) task with cheap LLM first; verify output for sanity;
+        if validation fails, retry with main LLM. Prefer this over run_ai_simple when
+        you want to save cost but still guarantee sane results.
+
+        sanity_check: Optional callable(response) -> bool. If None, uses a default
+            check (non-empty, no refusal/error prefix).
+        fallback_to_main: If True and sanity check fails, retry with main model.
+        """
+        from .aitools import run_ai_simple_with_fallback as _run_with_fallback
+        return _run_with_fallback(
+            system_prompt, user_message,
+            sanity_check=sanity_check,
+            fallback_to_main=fallback_to_main,
+        )
+
     def makeOneIteration(self) -> int:
         """
         Execute one iteration of the trading bot.

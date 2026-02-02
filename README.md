@@ -2,6 +2,8 @@
 
 **A Production-Ready, Kubernetes-Native Algorithmic Trading System**
 
+kubectl create secret generic tradingbot-secrets --from-env-file=.env --namespace=tradingbots-2025 --dry-run=client -o yaml | kubectl apply -f -
+
 ![Trading Bot Framework](docs/overview.png)
 
 This framework allows developers to build, backtest, and deploy automated trading strategies as **Kubernetes CronJobs**. It handles the "boring stuff"—data ingestion, technical analysis, database persistence, and portfolio tracking—so you can focus on the alpha.
@@ -223,6 +225,54 @@ def makeOneIteration(self):
 | `local_development()` | Optimize hyperparameters + backtest. |
 | `buy(symbol)` / `sell(symbol)` | Automated portfolio and DB logging. |
 | `rebalancePortfolio(weights)` | Rebalance to target weights. |
+| `run_ai(system_prompt, user_message)` | Runs AI with tools (main LLM); returns model response. Requires `OPENROUTER_API_KEY`. |
+| `run_ai_simple(system_prompt, user_message)` | Single-turn, no tools (cheap LLM); for summarization, extraction, classification. |
+| `run_ai_simple_with_fallback(system_prompt, user_message, sanity_check=..., fallback_to_main=True)` | Cheap LLM first; validates output; retries with main LLM if sanity check fails. |
+
+### AI Tools (LangChain + OpenRouter)
+
+Two LLMs: **main** (OPENROUTER_MAIN_MODEL, default `deepseek/deepseek-v3.2`) for tool-using flows; **cheap** (OPENROUTER_CHEAP_MODEL, default `openai/gpt-oss-120b`) for simple single-turn text tasks. Set `OPENROUTER_API_KEY` (required); optionally set the two model env vars.
+
+**With tools (main LLM):**
+
+```python
+response = bot.run_ai(
+    system_prompt="You are a trading assistant.",
+    user_message="Summarize my recent trades and portfolio."
+)
+print(response)  # Model response as string
+```
+
+**Simple tasks, no tools (cheap LLM):** summarization, extraction, classification, rewriting:
+
+```python
+summary = bot.run_ai_simple(
+    system_prompt="You summarize in one sentence.",
+    user_message="Summarize: ..."
+)
+```
+
+**Cheap-first with fallback:** Try cheap LLM first, validate output for sanity, and retry with main LLM if the result fails. Use for simple tasks when you want to save cost but guarantee sane results:
+
+```python
+result = bot.run_ai_simple_with_fallback(
+    system_prompt="You classify sentiment.",
+    user_message="Classify as buy/hold/sell: ...",
+    sanity_check=None,   # optional; default rejects empty/refusal/error prefix
+    fallback_to_main=True,
+)
+```
+
+**Tools available to the model (when using run_ai):**
+
+1. **get_market_data(symbol, period)** – Market data (OHLCV), default last two weeks.
+2. **get_portfolio_status()** – Current portfolio worth (USD) and holdings.
+3. **get_recent_trades(limit)** – Recent trades; for sells, profit of the closed trade is shown.
+4. **get_stock_news(symbol, limit)** – Recent news for a symbol (title, link, publisher, published_at) from the database.
+5. **get_stock_earnings(symbol, limit)** – Recent earnings dates and EPS (estimate, reported, surprise %) for a symbol from the database.
+6. **get_stock_insider_trades(symbol, limit)** – Recent insider transactions (insider, type, shares, value) for a symbol from the database.
+
+See [AI Tools Guide](docs/guides/ai-tools.md) and [AITools API](docs/api/aitools.md) for details.
 
 ### Portfolio Structure
 
@@ -268,11 +318,13 @@ See [Technical Analysis Guide](docs/guides/technical-analysis.md) for complete l
 * [Technical Analysis](docs/guides/technical-analysis.md) - Complete indicator reference
 * [Portfolio Management](docs/guides/portfolio-management.md) - Advanced portfolio operations
 * [Local Development](docs/guides/local-development.md) - Development workflows
+* [AI Tools](docs/guides/ai-tools.md) - LangChain + OpenRouter tools; cheap-first with fallback and sanity checks
 
 ### API Reference
 * [Bot API](docs/api/bot.md) - Complete Bot class documentation
 * [Data Service](docs/api/data-service.md) - Data fetching and caching
 * [Portfolio Manager](docs/api/portfolio-manager.md) - Trading operations
+* [AITools API](docs/api/aitools.md) - `run_ai_with_tools`, `run_ai_simple`, `run_ai_simple_with_fallback`
 
 ## 🎯 Example Bots
 
@@ -282,6 +334,7 @@ See [Technical Analysis Guide](docs/guides/technical-analysis.md) for complete l
 * **xauzenbot.py** - Gold (XAU) trading bot
 * **sharpeportfoliooptweekly.py** - Portfolio optimization with Sharpe ratio
 * **aihedgefundbot.py** - AI-driven portfolio rebalancing
+* **deepseektoolbot.py** - AI with tools (research + submit weights); cheap LLM sanity-check and main-LLM retry
 * **gptbasedstrategytabased.py** - GPT-based strategy with technical analysis
 
 See [Example Bots](docs/examples/example-bots.md) for implementation details.

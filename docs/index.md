@@ -15,7 +15,9 @@ This system provides a framework for building and deploying automated trading bo
 - [Quick Start Guide](getting-started/quick-start.md) - Get up and running in minutes
 - [Creating a Bot](getting-started/creating-a-bot.md) - Learn how to build your first bot
 - [Bot Class System](architecture/bot-class-system.md) - Understand the core architecture
+- [AI Tools Guide](guides/ai-tools.md) - LangChain + OpenRouter tools (market data, portfolio, recent trades)
 - [API Reference](api/bot.md) - Complete API documentation
+- [AITools API](api/aitools.md) - run_ai_with_tools, run_ai_simple, run_ai_simple_with_fallback
 
 ## Key Features
 
@@ -72,6 +74,17 @@ bot = MyBot()
 bot.local_development()  # Optimize and backtest
 ```
 
+### AI Tools (LangChain + OpenRouter)
+
+Run the AI with a system prompt and user message; the model can use tools to access market data, portfolio status, and recent trades (including profit on sells). Two LLMs: **main** (for tool-using flows) and **cheap** (for simple single-turn tasks). Use **run_ai_simple_with_fallback** to try the cheap LLM first and retry with the main LLM if the output fails a sanity check. Requires `OPENROUTER_API_KEY`. See [AI Tools Guide](guides/ai-tools.md).
+
+```python
+response = bot.run_ai(
+    system_prompt="You are a trading assistant.",
+    user_message="Summarize my portfolio and recent trades."
+)
+```
+
 ### Deployment
 
 Deploy to Kubernetes with Helm:
@@ -85,9 +98,9 @@ helm upgrade --install tradingbots ./helm/tradingbots \
 
 - **Getting Started**: Installation and quick start guides
 - **Architecture**: System design and core concepts
-- **API Reference**: Complete API documentation with examples
+- **API Reference**: Complete API documentation with examples (including [AITools API](api/aitools.md))
 - **Deployment**: Kubernetes and Helm deployment guides
-- **Guides**: In-depth tutorials and best practices
+- **Guides**: In-depth tutorials and best practices (including [AI Tools](guides/ai-tools.md))
 - **Examples**: Real-world bot implementations
 
 ## Need Help?

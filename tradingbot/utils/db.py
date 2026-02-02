@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from os import environ
 from typing import Generator
+from urllib.parse import quote_plus
 
 from sqlalchemy import (
     JSON,
@@ -12,8 +13,10 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
@@ -23,7 +26,30 @@ from sqlalchemy.orm import Session, sessionmaker
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = "postgresql+psycopg2://" + environ["POSTGRES_URI"]
+
+def _database_url() -> str:
+    """Build database URL from POSTGRES_URI or from cluster components (POSTGRES_HOST, etc.)."""
+    uri = environ.get("POSTGRES_URI")
+    if uri:
+        return "postgresql+psycopg2://" + uri
+    host = environ.get("POSTGRES_HOST")
+    if host:
+        user = environ.get("POSTGRES_USER", "postgres")
+        password = environ.get("POSTGRES_PASSWORD", "")
+        port = environ.get("POSTGRES_PORT", "5432")
+        database = environ.get("POSTGRES_DATABASE", "postgres")
+        # Quote password for special characters (e.g. &, $)
+        user_esc = quote_plus(user)
+        password_esc = quote_plus(password)
+        uri = f"{user_esc}:{password_esc}@{host}:{port}/{database}"
+        environ["POSTGRES_URI"] = uri  # So aihedgefundbot etc. can use it
+        return "postgresql+psycopg2://" + uri
+    raise KeyError(
+        "Set POSTGRES_URI or (POSTGRES_HOST + POSTGRES_PASSWORD) for database connection"
+    )
+
+
+DATABASE_URL = _database_url()
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
@@ -136,7 +162,7 @@ class RunLog(Base):
 class PortfolioWorth(Base):
     """
     Portfolio worth model for tracking portfolio value over time.
-    
+
     Attributes:
         bot_name: Name of the bot (primary key, part of composite key, foreign key to Bot.name)
         date: Date of the portfolio valuation (primary key, part of composite key)
@@ -150,6 +176,101 @@ class PortfolioWorth(Base):
     date = Column(DateTime, primary_key=True)
     portfolio_worth = Column(Float, nullable=False)
     holdings = Column(MutableDict.as_mutable(JSON), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class StockNews(Base):
+    """
+    Stock news model for storing news articles per symbol from yfinance.
+
+    Attributes:
+        symbol: Trading symbol
+        title: Article title
+        link: Article URL (unique per symbol)
+        publisher: Publisher name (nullable)
+        publisher_url: Publisher URL (nullable)
+        published_at: When the article was published (UTC)
+        related_tickers: JSON array of related tickers (nullable)
+        created_at: When this record was created
+    """
+    __tablename__ = "stock_news"
+    __table_args__ = (
+        UniqueConstraint("symbol", "link", name="uq_stock_news_symbol_link"),
+        Index("ix_stock_news_symbol_published_at", "symbol", "published_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False, index=True)
+    title = Column(String, nullable=False)
+    link = Column(String, nullable=False)
+    publisher = Column(String, nullable=True)
+    publisher_url = Column(String, nullable=True)
+    published_at = Column(DateTime, nullable=False)
+    related_tickers = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class StockEarnings(Base):
+    """
+    Stock earnings model for storing earnings dates and results from yfinance.
+
+    Attributes:
+        symbol: Trading symbol
+        report_date: Earnings report date
+        eps_estimate: Estimated EPS (nullable)
+        reported_eps: Reported EPS (nullable)
+        surprise_pct: Surprise percentage (nullable)
+        fiscal_period: Fiscal period if available (nullable)
+        created_at: When this record was created
+    """
+    __tablename__ = "stock_earnings"
+    __table_args__ = (
+        UniqueConstraint("symbol", "report_date", name="uq_stock_earnings_symbol_report_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False, index=True)
+    report_date = Column(DateTime, nullable=False)
+    eps_estimate = Column(Float, nullable=True)
+    reported_eps = Column(Float, nullable=True)
+    surprise_pct = Column(Float, nullable=True)
+    fiscal_period = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class StockInsiderTrade(Base):
+    """
+    Stock insider trade model for storing insider transactions from yfinance.
+
+    Attributes:
+        symbol: Trading symbol
+        transaction_date: Date of the transaction
+        insider_name: Name of the insider (nullable)
+        transaction_type: Type e.g. Purchase, Sale (nullable)
+        shares: Number of shares (nullable)
+        value: Transaction value if available (nullable)
+        created_at: When this record was created
+    """
+    __tablename__ = "stock_insider_trades"
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol",
+            "transaction_date",
+            "insider_name",
+            "transaction_type",
+            "shares",
+            name="uq_stock_insider_trades_key",
+        ),
+        Index("ix_stock_insider_trades_symbol_transaction_date", "symbol", "transaction_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False, index=True)
+    transaction_date = Column(DateTime, nullable=False)
+    insider_name = Column(String, nullable=True)
+    transaction_type = Column(String, nullable=True)
+    shares = Column(Float, nullable=True)
+    value = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
