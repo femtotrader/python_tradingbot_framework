@@ -36,7 +36,16 @@ class TARegimeAdaptiveBot(Bot):
         self,
         symbol: str = "SPY",
         interval: str = "1d",
-        period: str = "3mo",
+        # 1y, not 3mo. ta_regime_decision returns a flat 0 until it has
+        # hurst_window + 2 = 52 bars, and 3mo of daily data is only ~63 — an
+        # 11-bar margin. A holiday-heavy quarter, a data outage, or any bump to
+        # hurst_window silently drops the fetch under 52, at which point the bot
+        # does not error: it just returns "hold" forever and looks like a
+        # strategy with no opinion. Verified behaviour-neutral before changing —
+        # the decision on every bar 3mo could decide at all is identical under
+        # 3mo, 1y and 2y, because hurst and z-score read fixed trailing windows.
+        # This only widens the margin to ~199 bars.
+        period: str = "1y",
         hurst_window: int = 50,
         hurst_trend_threshold: float = 0.46,
         adx_threshold: float = 16,
