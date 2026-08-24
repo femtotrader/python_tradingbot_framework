@@ -75,14 +75,32 @@ class Collective2Broker(LiveBroker):
         return self._money(self._strategy_details(), "ModelAccountValue")
 
     def get_positions(self) -> dict[str, float]:
-        """Returns broker_symbol -> quantity."""
+        """Returns broker_symbol -> quantity.
+
+        The ticker is NESTED in the v4 response, exactly as `place_order` writes it:
+        `{"C2Symbol": {"FullSymbol": "QQQ", ...}, "ExchangeSymbol": {"Symbol": "QQQ", ...}}`.
+        There is no top-level "Symbol" key. Reading `pos["Symbol"]` returned None for
+        every row, so all positions collapsed onto a single `None` key and the last row
+        won — a strategy holding 113 QQQ and 152 TQQQ parsed as `{None: 152}`.
+
+        That is not a cosmetic parse bug. `_calculate_orders` does full target-state
+        reconciliation, so invisible holdings read as "not held": the copier would have
+        bought the entire target on top of the existing book (roughly doubling it) while
+        emitting a nonsense SELL for symbol None. Caught on 2026-08-24 by a dry run.
+        """
         data = self._get("Strategies/GetStrategyOpenPositions", {"StrategyIds": [int(self.system_id)]})
-        positions = {}
+        positions: dict[str, float] = {}
         # v4 returns { "Results": [ { ... } ] }
         for pos in data.get("Results", []):
-            symbol = pos.get("Symbol")
-            qty = float(pos.get("Quantity", 0.0))
-            positions[symbol] = qty
+            symbol = (pos.get("C2Symbol") or {}).get("FullSymbol") or (pos.get("ExchangeSymbol") or {}).get("Symbol")
+            if not symbol:
+                # Raise rather than skip. Skipping would under-report the book and the
+                # copier would re-buy what we already hold; sync() catches this and
+                # aborts, which is the correct outcome for an unreadable position.
+                raise ValueError(f"Collective2 position has no resolvable symbol: {pos}")
+            # Accumulate: C2 may return one row per lot for the same ticker, and
+            # assignment would silently keep only the last.
+            positions[symbol] = positions.get(symbol, 0.0) + float(pos.get("Quantity", 0.0))
         return positions
 
     # C2 API v4 has no native quote endpoint — base class falls back to yfinance.
