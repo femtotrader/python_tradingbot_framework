@@ -294,30 +294,44 @@ liveTrade:
   # Collective2 — requires COLLECTIVE2_API_KEY in tradingbot-secrets.
   collective2:
     # DISABLED: strategy 155809898 was handed over to collective2XauZerifine below,
-    # which now publishes XAUZenbotTreeBot to it. Do NOT re-enable this while that
-    # instance points at the same systemId — the two copiers would liquidate each
-    # other's positions on every run (the template hard-fails if you try).
+    # which publishes to it. Do NOT re-enable this while that instance points at the
+    # same systemId — the two copiers would liquidate each other's positions on every
+    # run (the template hard-fails if you try).
     enabled: false
     schedule: "10 21 * * 1-5" # 9:10 PM UTC (10 min after AdaptiveMeanReversionBot at 21:00)
     systemId: "155809898" # Collective2 strategy ID
     # portfolioFraction: "0.5"  # optional: override the shared liveTrade.portfolioFraction for this broker
 
-  # Collective2 "XAUZerifine" — publishes XAUZenbotTreeBot to C2 strategy 155809898,
-  # taken over from liveTrade.collective2 (disabled above). C2 API keys are
-  # account-scoped and address strategies by numeric StrategyId, so this reuses
-  # COLLECTIVE2_API_KEY. The strategy keeps its existing C2 track record.
-  # NOTE: XAUZenbotTreeBot trades ^XAU (an index) — it only reaches a tradeable
-  # instrument via the ^XAU -> GDX override in tradingbot/livetrade/symbol_map.json.
+  # Collective2 "XAUZerifine" — publishes to C2 strategy 155809898, taken over from
+  # liveTrade.collective2 (disabled above). C2 API keys are account-scoped and address
+  # strategies by numeric StrategyId, so this reuses COLLECTIVE2_API_KEY. The strategy
+  # keeps its existing C2 track record.
+  #
+  # Was '{"XAUZenbotTreeBot": 1.0}' and published NOTHING from 2026-07-06 to 2026-08-24.
+  # That bot's whole edge was the single condition "^XAU below 325" — ablated over a
+  # year of 1m bars, the bare level rule scores Sharpe 3.02 while the full five-indicator
+  # tree scores 1.07, i.e. the indicators subtract ~49pp rather than adding signal.
+  # ^XAU crossed 325 in July 2026 and now trades ~420, so the tree returns -1 on every
+  # bar and target_weights is always empty. It is not refittable: two scale-free
+  # reformulations were tested and both were worse (one +4% against an +81% benchmark,
+  # the other negative across all 768 grid points). Do not point this back at
+  # XAUZenbotTreeBot without rebuilding that strategy from scratch.
+  #
+  # These two replace it because they actually hold overnight, which a once-daily
+  # 21:50 UTC snapshot can see — XAUZenbotTreeBot round-tripped intraday (buy 17:15,
+  # sell 17:55) and was flat by the time the copier looked, so even a working version
+  # of it would have been near-invisible at this cadence. QQQ/TQQQ are plain ETFs and
+  # need no symbol_map override (unlike ^XAU, which required ^XAU -> GDX).
   collective2XauZerifine:
     enabled: true
     schedule: "50 21 * * 1-5" # 9:50 PM UTC (C2 :10, IB :20, eToro :30, Darwinex :40)
     systemId: "155809898"
-    botWeights: '{"XAUZenbotTreeBot": 1.0}'
-    # LIVE. sync() is a full target-state reconciliation, so it WOULD liquidate the
-    # inherited QQQ/TQQQ positions — but only once XAUZenbotTreeBot is actually
-    # holding something. While the bot is flat (~94% of days) target_weights is
-    # empty, sync() early-returns at copier.py:42, and the stale positions survive
-    # untouched. Flatten strategy 155809898 by hand if you want a clean handover.
+    botWeights: '{"AdaptiveMeanReversionBot": 0.5,"SynthesizedHyperConvexityBot": 0.5}'
+    # LIVE, and now genuinely reconciling. sync() is a full target-state sync, so the
+    # first run with a non-empty target WILL liquidate whatever strategy 155809898 still
+    # holds from the old handover and rebuild to QQQ/TQQQ. That did not happen while the
+    # target was empty (sync() early-returns at copier.py:44), which is why those stale
+    # positions survived untouched until now.
     dryRun: "false"
     # apiKeySecretKey: "COLLECTIVE2_API_KEY_XAUZERIFINE" # optional: only if a different C2 account
     # portfolioFraction: "0.5" # optional: override the shared liveTrade.portfolioFraction
