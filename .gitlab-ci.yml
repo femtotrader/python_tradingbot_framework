@@ -63,12 +63,16 @@ helm-kubectl-deploy:
   dependencies:
   - build-docker
   script:
-  # Deploy trading bots and PostgreSQL using Helm, pinned to this commit's image.
+  # Deploy trading bots and PostgreSQL using Helm, pinned to the tag build-docker
+  # just pushed. This MUST match $IMAGE above: build-docker only ever pushes
+  # :main, so deploying :latest pins every CronJob to a tag nothing publishes and
+  # the whole fleet goes ImagePullBackOff ("manifest unknown") until the next
+  # deploy. That is exactly what happened between 2026-08-18 and 2026-08-21.
   - |
     helm upgrade --install tradingbots \
       ./helm/tradingbots \
       --create-namespace \
       --namespace tradingbots-2025 \
-      --set image.tag=latest
+      --set image.tag=main
 
   environment: production
