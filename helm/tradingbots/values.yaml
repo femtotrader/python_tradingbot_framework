@@ -10,19 +10,22 @@ image:
   # here or there names a tag nothing publishes, and every CronJob in the chart
   # goes ImagePullBackOff with "manifest unknown" — see the 2026-08-18 outage.
   tag: main
-  # IfNotPresent, not Always: re-pulling costs a registry auth round-trip on every
-  # single job start. With five CronJobs on */5 that was ~1.4k pulls/day against
-  # gitlab.com, and when one of them timed out the job died: xauzenbot and
-  # xauaisyntheticmetalbot both failed at 13:45 and again at 13:53 on 2026-08-17,
-  # and xauaisyntheticmetalbot hit ErrImagePull again on 2026-08-18 ("Client.Timeout
-  # exceeded while awaiting headers"). Nothing was wrong with the code — the bots
-  # simply never started.
+  # Always, and it MUST stay Always while :main is the deployed tag. The tag is
+  # mutable (it was an immutable $CI_COMMIT_SHA until 1f99c0f), so under
+  # IfNotPresent kubelet sees the name already cached and never re-pulls — a
+  # deploy then silently has no effect and the node keeps running whatever :main
+  # it happened to cache. That stranded the fleet on a pre-import-root-migration
+  # image on 2026-08-24: every job crashed with "No module named 'tradingbot'"
+  # while the registry's :main was correct all along.
   #
-  # CAVEAT, since :main is mutable (it was an immutable $CI_COMMIT_SHA until
-  # 1f99c0f): a node that already has a :main layer cached keeps running THAT code
-  # after a deploy, because the tag name never changes. Kick stale nodes by hand,
-  # or go back to SHA tags, if a deploy appears not to take effect.
-  pullPolicy: IfNotPresent
+  # The cost is real and known: a registry auth round-trip on every job start,
+  # ~1.4k pulls/day against gitlab.com from the */5 CronJobs. When one times out
+  # the job dies — xauzenbot and xauaisyntheticmetalbot both failed at 13:45 and
+  # again at 13:53 on 2026-08-17, and xauaisyntheticmetalbot hit ErrImagePull on
+  # 2026-08-18 ("Client.Timeout exceeded while awaiting headers"). If that noise
+  # becomes intolerable, the fix is immutable SHA tags + IfNotPresent, NOT
+  # flipping this back on its own.
+  pullPolicy: Always
 
 # Kubernetes namespace for all resources
 namespace: tradingbots-2025
