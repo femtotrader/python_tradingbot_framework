@@ -21,34 +21,83 @@ from tradingbot.utils.runner import run_bot
 
 logger = logging.getLogger(__name__)
 
+_FALLBACK_TICKERS = ["SPY", "QQQ", "GLD", "BTC-USD"]
+
+# Forecasts older than this are ignored. kronosbot writes every weeknight, so anything
+# older means its CronJob has been failing — and a week-old prediction for a date that
+# is merely still in the future is not a signal. It also ages out the rows written
+# before the Space's business-day fix, whose target dates land on weekends.
+MAX_PREDICTION_AGE_DAYS = 4
+
+
+def _utc_naive_now() -> datetime:
+    """Current UTC time as a naive datetime.
+
+    kronos_predictions.{target_date,prediction_made_at} are bare DateTime columns
+    holding naive UTC. Filtering them with an aware datetime makes Postgres coerce
+    the comparison through the session time zone — the same shape of bug that froze
+    stock_insider_trades for six months.
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _prediction_window() -> tuple[datetime, datetime]:
+    """Return (earliest usable target_date, earliest acceptable prediction_made_at)."""
+    now = _utc_naive_now()
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return tomorrow, now - timedelta(days=MAX_PREDICTION_AGE_DAYS)
+
 
 def _load_predicted_tickers() -> list[str]:
-    """Return all symbols that have a Kronos prediction for tomorrow or later."""
+    """Return all symbols carrying a fresh Kronos prediction for tomorrow or later."""
     try:
-        tomorrow = (datetime.now(UTC) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow, min_made_at = _prediction_window()
         with get_db_session() as session:
             rows = (
-                session.query(KronosPrediction.symbol).filter(KronosPrediction.target_date >= tomorrow).distinct().all()
+                session.query(KronosPrediction.symbol)
+                .filter(
+                    KronosPrediction.target_date >= tomorrow,
+                    KronosPrediction.prediction_made_at >= min_made_at,
+                )
+                .distinct()
+                .all()
             )
         tickers = [r.symbol for r in rows]
+        if not tickers:
+            logger.warning(
+                f"KronosTraderBot: no predictions newer than {MAX_PREDICTION_AGE_DAYS}d — "
+                f"is the kronosbot CronJob running? Falling back to defaults (bot will hold)."
+            )
+            return list(_FALLBACK_TICKERS)
         logger.info(f"KronosTraderBot: loaded {len(tickers)} tickers from DB: {tickers}")
         return tickers
     except Exception as exc:
         logger.warning(f"KronosTraderBot: could not load tickers from DB ({exc}), falling back to defaults")
-        return ["SPY", "QQQ", "GLD", "BTC-USD"]
+        return list(_FALLBACK_TICKERS)
 
 
 class KronosTraderBot(Bot):
+    # Measured over the 9.5k forecasts stored between Apr and Aug 2026, anchored to the
+    # last bar the model actually saw: next-bar MAE was ~2.5% of price against ~0.6% for
+    # assuming no change, direction was right 32% of the time, and predicted-vs-realised
+    # return correlation was 0.02. The 2%/1% thresholds this bot shipped with sat *below*
+    # that noise floor, so nearly every symbol tripped one on sampling noise alone — 25
+    # orders on the 2026-08-24 run. Thresholds are parked above the measured noise until a
+    # re-measurement shows Kronos beating the naive baseline; see
+    # docs/guides/kronos-forecasting.md#forecast-quality for how to re-run that check.
     param_grid: ClassVar[dict] = {
-        "buy_threshold": [0.01, 0.02, 0.03],
-        "sell_threshold": [0.005, 0.01, 0.02],
+        "buy_threshold": [0.05, 0.075, 0.10],
+        "sell_threshold": [0.05, 0.075, 0.10],
     }
 
-    def __init__(self, buy_threshold: float = 0.02, sell_threshold: float = 0.01, **kwargs):
+    def __init__(self, buy_threshold: float = 0.05, sell_threshold: float = 0.05, **kwargs):
         """
         Args:
-            buy_threshold:  Minimum predicted upside (fraction) to trigger a buy. Default 2%.
-            sell_threshold: Minimum predicted downside (fraction) to trigger a sell. Default 1%.
+            buy_threshold:  Minimum predicted upside (fraction) to trigger a buy. Default 5%.
+            sell_threshold: Minimum predicted downside (fraction) to trigger a sell. Default 5%.
+
+        Defaults sit deliberately above the forecast's measured error — see the class
+        comment. Lowering them re-enables trading on noise.
         """
         tickers = _load_predicted_tickers()
         super().__init__(
@@ -65,15 +114,20 @@ class KronosTraderBot(Bot):
         self._pred_cache: dict[str, float | None] = {}  # one DB query per ticker per run
 
     def _get_predicted_close(self, symbol: str) -> float | None:
-        """Return the predicted close price for tomorrow for *symbol*, or None."""
+        """Return the predicted close for the next forecast bar of *symbol*, or None.
+
+        Only forecasts made within MAX_PREDICTION_AGE_DAYS count; a surviving row from
+        an abandoned run is otherwise indistinguishable from last night's.
+        """
         try:
-            tomorrow = (datetime.now(UTC) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            tomorrow, min_made_at = _prediction_window()
             with get_db_session() as session:
                 pred = (
                     session.query(KronosPrediction)
                     .filter(
                         KronosPrediction.symbol == symbol,
                         KronosPrediction.target_date >= tomorrow,
+                        KronosPrediction.prediction_made_at >= min_made_at,
                     )
                     .order_by(
                         KronosPrediction.target_date.asc(),

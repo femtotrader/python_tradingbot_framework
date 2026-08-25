@@ -7,6 +7,8 @@ Lifecycle:
   1. Wake the HF Space via HfApi.restart_space()
   2. Poll /health with retries until Kronos-mini finishes loading (~60s)
   3. Predict the next KRONOS_HORIZON trading days for each active ticker
+     (the Space steps by business days, and bars that have already closed are
+     dropped here — see the stale-input note in main())
   4. Upsert KronosPrediction rows into Postgres (deduplicated on symbol+target_date+model)
   5. Pause the Space immediately to save HF quota (~2-3 min total runtime)
 
@@ -142,6 +144,8 @@ def main() -> None:
     # harmless here only because uq_kronos_predictions_key excludes this column.
     made_at = datetime.now(UTC).replace(tzinfo=None)
 
+    stale: list[str] = []
+
     for symbol in symbols:
         logger.info(f"  Predicting {symbol}...")
         pred_df = client.predict(symbol, horizon=HORIZON)
@@ -149,22 +153,42 @@ def main() -> None:
             logger.warning(f"  Prediction failed for {symbol}, skipping")
             continue
 
-        for _, row in pred_df.iterrows():
+        kept = 0
+        # step is 1-based over the *returned* bars, i.e. steps ahead of the model's
+        # last input bar — that is what horizon_days means, and it stays correct even
+        # when the leading bars below are dropped.
+        for step, (_, row) in enumerate(pred_df.iterrows(), start=1):
+            target = row["target_date"].to_pydatetime()
+
+            # When yfinance hands us stale history (the European listings routinely lag
+            # a session), the Space forecasts forward from that stale bar and the first
+            # rows land on days that have already closed. Storing them would let
+            # KronosTraderBot pick a "next" prediction for a bar it can already observe.
+            if target <= made_at:
+                continue
+
             all_predictions.append(
                 KronosPrediction(
                     symbol=symbol,
                     model_name="NeoQuasar/Kronos-mini",
                     interval="1d",
                     prediction_made_at=made_at,
-                    target_date=row["target_date"].to_pydatetime(),
+                    target_date=target,
                     predicted_open=float(row["open"]),
                     predicted_high=float(row["high"]),
                     predicted_low=float(row["low"]),
                     predicted_close=float(row["close"]),
                     predicted_volume=float(row.get("volume", 0) or 0),
-                    horizon_days=HORIZON,
+                    horizon_days=step,
                 )
             )
+            kept += 1
+
+        if kept < len(pred_df):
+            stale.append(f"{symbol} ({len(pred_df) - kept}/{len(pred_df)})")
+
+    if stale:
+        logger.warning(f"Dropped already-elapsed forecast bars (stale input data) for: {', '.join(stale)}")
 
     if all_predictions:
         _upsert_predictions(all_predictions)

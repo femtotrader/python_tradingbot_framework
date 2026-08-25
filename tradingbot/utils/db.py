@@ -354,7 +354,10 @@ class KronosPrediction(Base):
         predicted_low: Predicted low price
         predicted_close: Predicted close price
         predicted_volume: Predicted volume (nullable — may be zero for some symbols)
-        horizon_days: Steps ahead this row represents (1 = tomorrow, 5 = five days out)
+        horizon_days: Steps ahead of the model's last input bar that this row represents
+            (1 = the first forecast bar). Usually one trading day per step, but when the
+            input history is stale the first steps are dropped before writing, so the
+            lowest horizon_days stored for a symbol can be greater than 1.
     """
 
     __tablename__ = "kronos_predictions"

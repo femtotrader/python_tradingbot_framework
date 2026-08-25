@@ -29,7 +29,10 @@ from .data_service import DataService
 logger = logging.getLogger(__name__)
 
 _SPACE_URL = os.environ.get("KRONOS_SPACE_URL", "").rstrip("/")
-_PREDICT_TIMEOUT = 120  # seconds — Kronos inference on CPU can take ~30-60s
+# Kronos inference on CPU. The Space averages KRONOS_SAMPLE_COUNT sampled paths per
+# call (20 by default), which the model batches into one forward pass but still costs
+# noticeably more than the single sample this was originally sized for.
+_PREDICT_TIMEOUT = 300  # seconds
 
 
 class KronosClient:

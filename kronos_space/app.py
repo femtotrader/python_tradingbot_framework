@@ -2,11 +2,17 @@
 Kronos Trading API — HF Docker Space
 
 Loads Kronos-mini at startup and exposes two endpoints:
-  GET  /health   → {"status": "ok", "model": "NeoQuasar/Kronos-mini"}
+  GET  /health   → {"status": "ok", "model": "NeoQuasar/Kronos-mini", ...sampling config}
   POST /predict  → accepts OHLCV JSON + horizon, returns forecast rows
 
 Intended to be called by kronosbot.py running in K8s.
 The Space is paused between runs to save HF quota.
+
+Environment variables:
+  KRONOS_MODEL         Model key from _MODEL_CONFIGS (default "kronos-mini")
+  KRONOS_SAMPLE_COUNT  Sampled paths averaged per forecast (default 20 — see below)
+  KRONOS_TEMPERATURE   Sampling temperature T (default 1.0)
+  KRONOS_TOP_P         Nucleus sampling cutoff (default 0.9)
 """
 
 import logging
@@ -18,6 +24,11 @@ from contextlib import asynccontextmanager
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+try:  # repo layout (tests, linting)
+    from kronos_space.timeline import future_timestamps
+except ImportError:  # flat layout inside the HF Space, where app.py sits at /app/app.py
+    from timeline import future_timestamps  # type: ignore[no-redef]
 
 # Kronos has no PyPI package — source is cloned into /app/Kronos by the Dockerfile
 sys.path.insert(0, "/app/Kronos")
@@ -40,6 +51,17 @@ _MODEL_CONFIGS: dict[str, dict[str, str | int]] = {
 }
 
 MODEL_KEY = os.environ.get("KRONOS_MODEL", "kronos-mini")
+
+# Kronos is an autoregressive *generative* model: each call to KronosPredictor.predict
+# draws sample_count full paths from the predictive distribution and averages them.
+# sample_count=1 therefore returns ONE RANDOM PATH, not a conditional-mean forecast —
+# which is what this Space shipped with, and it made the output pure noise: measured
+# against the realised bars, next-day MAE was ~2.5% of price versus ~0.6% for assuming
+# no change at all, with ~0.02 correlation between predicted and realised returns.
+# Averaging many samples is what turns the sampler into an estimator of the mean.
+SAMPLE_COUNT = int(os.environ.get("KRONOS_SAMPLE_COUNT", "20"))
+TEMPERATURE = float(os.environ.get("KRONOS_TEMPERATURE", "1.0"))
+TOP_P = float(os.environ.get("KRONOS_TOP_P", "0.9"))
 
 # Loaded once at startup via lifespan
 _predictor: KronosPredictor | None = None
@@ -105,7 +127,15 @@ class PredictResponse(BaseModel):
 def health():
     if _predictor is None:
         return {"status": "loading", "model": MODEL_KEY}
-    return {"status": "ok", "model": _model_id}
+    # Sampling config is echoed so callers can confirm which build is live —
+    # a Space running the old sample_count=1 is indistinguishable otherwise.
+    return {
+        "status": "ok",
+        "model": _model_id,
+        "sample_count": SAMPLE_COUNT,
+        "temperature": TEMPERATURE,
+        "top_p": TOP_P,
+    }
 
 
 @app.post("/predict", response_model=PredictResponse)
@@ -123,27 +153,30 @@ def predict(req: PredictRequest):
     x_timestamp = df["timestamp"].copy()
     x_df = df[["open", "high", "low", "close", "volume"]].copy()
 
-    # Infer step frequency from the actual data so we work for any interval
-    deltas = x_timestamp.diff().dropna()
-    freq = deltas.median()
-    last_ts = x_timestamp.iloc[-1]
-    future_ts = pd.date_range(start=last_ts + freq, periods=req.horizon, freq=freq)
+    # Step frequency is inferred from the data, so this works for any interval —
+    # and skips weekends for daily bars on instruments that don't trade them.
+    try:
+        future_ts = future_timestamps(x_timestamp, req.horizon)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     y_timestamp = pd.Series(future_ts, name="timestamp")
 
+    t0 = time.time()
     try:
         pred_df = _predictor.predict(
             df=x_df,
             x_timestamp=x_timestamp,
             y_timestamp=y_timestamp,
             pred_len=req.horizon,
-            T=1.0,
-            top_p=0.9,
-            sample_count=1,
+            T=TEMPERATURE,
+            top_p=TOP_P,
+            sample_count=SAMPLE_COUNT,
             verbose=False,
         )
     except Exception as exc:
         logger.error(f"Prediction error for {req.symbol}: {exc}")
         raise HTTPException(status_code=500, detail=f"Prediction failed: {exc}") from exc
+    logger.info(f"{req.symbol}: {req.horizon} bars from {SAMPLE_COUNT} samples in {time.time() - t0:.1f}s")
 
     predictions = []
     for ts, (_, row) in zip(future_ts, pred_df.iterrows(), strict=False):
