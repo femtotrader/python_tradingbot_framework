@@ -92,6 +92,64 @@ def test_c2_get_positions_empty_book(broker):
         assert broker.get_positions() == {}
 
 
+def _supported(underlying, symbol_type, description="", exchange="DEFAULT"):
+    """One GetSupportedSymbols row. Note C2Symbol has Underlying, NOT FullSymbol."""
+    return {
+        "Description": description,
+        "C2Symbol": {"SymbolType": symbol_type, "Underlying": underlying, "Description": description},
+        "ExchangeSymbol": {"Symbol": underlying, "SecurityExchange": exchange},
+    }
+
+
+def test_c2_search_symbol_reads_nested_fields_and_filters(broker):
+    """
+    GetSupportedSymbols ignores SearchText and returns the whole universe, with
+    no top-level Symbol/SymbolType/Exchange. Reading the flat keys yielded 188
+    rows of symbol=None all typed "stock", futures and forex included.
+    """
+    universe = {
+        "Results": [
+            _supported("@YM", "future", "MINI DOW [CBOT]", "XCBT"),
+            _supported("EUR/USD", "forex"),
+            _supported("QQQ", "stock", "Invesco QQQ Trust"),
+            _supported("BRK.B", "stock", "Berkshire class B"),
+        ]
+    }
+    with patch.object(broker.client, "get") as mock_get:
+        mock_get.return_value = _response(universe)
+        assert broker.search_symbol("QQQ") == [
+            {
+                "symbol": "QQQ",
+                "description": "Invesco QQQ Trust",
+                "type": "stock",
+                "exchange": "DEFAULT",
+                "score": 100,
+            }
+        ]
+        assert broker.search_symbol("@YM")[0]["type"] == "future"
+        assert broker.search_symbol("EUR/USD")[0]["symbol"] == "EUR/USD"
+
+
+def test_c2_search_symbol_ranks_exact_ticker_above_description_match(broker):
+    universe = {"Results": [_supported("PSQ", "stock", "Short QQQ ETF"), _supported("QQQ", "stock", "Invesco QQQ")]}
+    with patch.object(broker.client, "get") as mock_get:
+        mock_get.return_value = _response(universe)
+        assert [c["symbol"] for c in broker.search_symbol("QQQ")] == ["QQQ", "PSQ"]
+
+
+def test_c2_position_rows_render_nested_symbol_and_avgpx(broker):
+    """The summary table read Symbol/SymbolType/OpenPrice — none of which exist."""
+    row = _position("QQQ", 113)
+    row["AvgPx"] = 656.35071
+    with patch.object(broker.client, "get") as mock_get:
+        mock_get.return_value = _response({"Results": [row]})
+        header, rows = broker._position_rows()
+    assert "AvgPrice" in header
+    assert "QQQ" in rows[0]
+    assert "stock" in rows[0]
+    assert "656.3507" in rows[0]
+
+
 def test_c2_cancel_open_orders_cancels_every_working_order(broker):
     """
     GetStrategyOpenPositions does not reflect unfilled orders, so a second sync

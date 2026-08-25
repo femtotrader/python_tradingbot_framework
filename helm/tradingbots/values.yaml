@@ -65,6 +65,12 @@ cronjob:
   # Maximum time a job can run before being terminated (in seconds)
   # Prevents jobs from hanging indefinitely (30 minutes = 1800 seconds)
   activeDeadlineSeconds: 1800
+  # How late a schedule may start before the controller skips it entirely.
+  # Applied to the livetrade CronJobs only (see templates/_livetrade.tpl) — a
+  # missed bot or reporting run is worth catching up, a missed order-submitting
+  # run is not. Keep this comfortably below the gap between livetrade schedules
+  # (they are 10 minutes apart) so a skipped run never collides with the next.
+  startingDeadlineSeconds: 300
   # Automatically delete completed jobs after this time (in seconds).
   # 1 week so logs of the last 3 runs (retained by history limits) stay viewable.
   ttlSecondsAfterFinished: 604800

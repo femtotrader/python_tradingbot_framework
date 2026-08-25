@@ -33,6 +33,14 @@ metadata:
     meta.helm.sh/release-namespace: {{ $.Release.Namespace }}
 spec:
   schedule: {{ .schedule | quote }}
+  # Skip a schedule the controller is late for instead of running it whenever it
+  # catches up. Unsuspending a CronJob makes Kubernetes immediately fire every
+  # missed schedule, and a livetrade catch-up run submits orders at a moment
+  # nobody chose — on 2026-08-25 unsuspending the Collective2 copier ran the
+  # previous evening's 21:50 schedule at 07:26 the next morning, re-sending
+  # orders that were still working and queueing 147 QQQ sells against 113 shares
+  # held. Only livetrade carries this; a missed bot or reporting run is harmless.
+  startingDeadlineSeconds: {{ $.Values.cronjob.startingDeadlineSeconds | default 300 }}
   successfulJobsHistoryLimit: {{ $.Values.cronjob.successfulJobsHistoryLimit }}
   failedJobsHistoryLimit: {{ $.Values.cronjob.failedJobsHistoryLimit }}
   concurrencyPolicy: {{ $.Values.cronjob.concurrencyPolicy }}

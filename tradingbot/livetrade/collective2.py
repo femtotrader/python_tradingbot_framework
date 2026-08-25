@@ -211,24 +211,55 @@ class Collective2Broker(LiveBroker):
     def search_symbol(self, query: str) -> list[dict]:
         """
         Search for matching symbols on C2.
+
+        Two v4 behaviours this has to work around, both verified against the live
+        endpoint on 2026-08-25 (188 rows: 120 future, 42 forex, 26 stock):
+
+        1. `SearchText` is IGNORED — the endpoint returns the entire supported
+           universe for any query, so the filtering has to happen here.
+        2. Rows carry no top-level `Symbol`, `SymbolType` or `Exchange`. The ticker
+           is `C2Symbol.Underlying` (note: `FullSymbol`, which the positions and
+           order endpoints use, is absent here) with `ExchangeSymbol.Symbol` as a
+           fallback. Reading the flat keys returned `symbol: None` for all 188 rows
+           and typed every one of them "stock", futures and forex included.
+
+        Do not treat an empty result as "C2 cannot trade this". The endpoint is not
+        a symbol catalogue: its 26 stocks are irregularly-formatted tickers
+        (BF.A, BRK.B, RDS.B, C-N) that need special notation, alongside every
+        future and forex pair. Ordinary US equities are absent — QQQ and TQQQ both
+        return nothing here while the strategy holds and trades them fine. So
+        discover_symbols.py cannot map equities through C2 search; they come from
+        the static symbol map instead.
         """
         logger.info(f"Searching C2 for '{query}'")
         try:
             # v4 search endpoint: /Strategies/GetSupportedSymbols
             data = self._get("Strategies/GetSupportedSymbols", {"SearchText": query})
+            needle = query.strip().upper()
             candidates = []
             # v4 returns { "Results": [ ... ] }
             for item in data.get("Results", []):
+                c2 = item.get("C2Symbol") or {}
+                exch = item.get("ExchangeSymbol") or {}
+                symbol = c2.get("Underlying") or exch.get("Symbol")
+                if not symbol:
+                    continue
+                haystack = f"{symbol} {item.get('Description') or c2.get('Description') or ''}".upper()
+                if needle and needle not in haystack:
+                    continue
                 candidates.append(
                     {
-                        "symbol": item.get("Symbol"),
-                        "description": item.get("Description"),
-                        "type": item.get("SymbolType", "stock"),
-                        "exchange": item.get("Exchange"),
-                        "score": 100,
+                        "symbol": symbol,
+                        "description": item.get("Description") or c2.get("Description"),
+                        "type": c2.get("SymbolType") or "stock",
+                        "exchange": exch.get("SecurityExchange"),
+                        # Exact ticker beats a description substring, so callers
+                        # picking max(score) get QQQ rather than the first row that
+                        # merely mentions it.
+                        "score": 100 if symbol.upper() == needle else 50,
                     }
                 )
-            return candidates
+            return sorted(candidates, key=lambda c: -c["score"])
         except Exception as e:
             logger.error(f"C2 symbol search failed: {e}")
             return []
@@ -249,16 +280,23 @@ class Collective2Broker(LiveBroker):
         ]
 
     def _position_rows(self) -> tuple[str, list[str]]:
+        # Same nesting trap as get_positions: there is no top-level Symbol,
+        # SymbolType or OpenPrice on a v4 position. This printed a blank ticker,
+        # a blank type and 0.0000 for the price on every row. The average price
+        # field is AvgPx. OpenPnL genuinely is not returned, so it is dropped
+        # rather than displayed as a hardcoded 0.00.
         positions_data = self._get("Strategies/GetStrategyOpenPositions", {"StrategyIds": [int(self.system_id)]})
         results = positions_data.get("Results", [])
-        header = f"  {'Symbol':<14} {'Type':<8} {'Qty':>12} {'AvgPrice':>12} {'OpenPnL':>12}"
-        rows = [
-            f"  {p.get('Symbol', '')!s:<14} {p.get('SymbolType', '')!s:<8} "
-            f"{float(p.get('Quantity', 0)):>12.4f} "
-            f"{float(p.get('OpenPrice', 0) or 0):>12.4f} "
-            f"{float(p.get('OpenPnL', 0) or 0):>12.2f}"
-            for p in results
-        ]
+        header = f"  {'Symbol':<14} {'Type':<8} {'Qty':>12} {'AvgPrice':>12}"
+        rows = []
+        for p in results:
+            c2 = p.get("C2Symbol") or {}
+            symbol = c2.get("FullSymbol") or (p.get("ExchangeSymbol") or {}).get("Symbol") or ""
+            rows.append(
+                f"  {symbol!s:<14} {c2.get('SymbolType', '')!s:<8} "
+                f"{float(p.get('Quantity', 0) or 0):>12.4f} "
+                f"{float(p.get('AvgPx', 0) or 0):>12.4f}"
+            )
         return header, rows
 
 
