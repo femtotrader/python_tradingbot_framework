@@ -49,6 +49,14 @@ class Collective2Broker(LiveBroker):
         response.raise_for_status()
         return response.json()
 
+    def _delete(self, endpoint: str, params: dict | None = None) -> dict:
+        url = f"{self.BASE_URL}/{endpoint}"
+        response = self.client.request("DELETE", url, params=params)
+        if response.status_code >= 400:
+            logger.error(f"C2 DELETE {endpoint} -> {response.status_code}: {response.text}")
+        response.raise_for_status()
+        return response.json()
+
     def _strategy_details(self) -> dict:
         """Returns the first strategy object from GetStrategyDetails response."""
         data = self._get("Strategies/GetStrategyDetails", {"StrategyId": self.system_id})
@@ -103,6 +111,37 @@ class Collective2Broker(LiveBroker):
             positions[symbol] = positions.get(symbol, 0.0) + float(pos.get("Quantity", 0.0))
         return positions
 
+    def get_active_orders(self) -> list[dict]:
+        """Working (unfilled) orders. Note the plural `StrategyIds` — `StrategyId` 400s."""
+        data = self._get("Strategies/GetStrategyActiveOrders", {"StrategyIds": [int(self.system_id)]})
+        return data.get("Results") or []
+
+    def cancel_open_orders(self) -> int:
+        """Cancel every working order before the copier sizes new ones. Returns count cancelled.
+
+        Without this, C2 fell through to LiveBroker's warn-and-return-0 default, and
+        GetStrategyOpenPositions does NOT reflect unfilled orders. So a second sync run
+        before the first one's orders filled saw the ORIGINAL book, recomputed the same
+        deltas, and submitted them again. On 2026-08-25 two runs 4 minutes apart (the
+        second triggered by unsuspending the CronJob, which immediately ran the missed
+        21:50 schedule) queued 147 QQQ sells against 113 shares held — the strategy would
+        have opened net short 34 QQQ. Orders sit working until the next session open, so
+        any run outside market hours leaves a full window for this to happen.
+        """
+        cancelled = 0
+        for order in self.get_active_orders():
+            signal_id = order.get("SignalId")
+            if not signal_id:
+                continue
+            # Both ids are mandatory; SignalId alone 400s with "StrategyId: Missing value".
+            self._delete(
+                "Strategies/CancelStrategyOrder",
+                {"SignalId": int(signal_id), "StrategyId": int(self.system_id)},
+            )
+            logger.info(f"Cancelled working C2 order SignalId {signal_id}")
+            cancelled += 1
+        return cancelled
+
     # C2 API v4 has no native quote endpoint — base class falls back to yfinance.
 
     def place_order(
@@ -145,14 +184,23 @@ class Collective2Broker(LiveBroker):
         logger.info(f"Submitting C2 order: {payload}")
         try:
             result = self._post("Strategies/NewStrategyOrder", payload)
-            # C2 v4 success is usually Success: True
-            if not result.get("Success"):
-                # Sometimes error details are in ResponseStatus
-                status = result.get("ResponseStatus", {})
-                error_msg = status.get("Message") or result.get("Error", {}).get("Message") or "Unknown error"
-                logger.error(f"C2 Order Failed: {error_msg} (Payload: {payload})")
+            # v4 acknowledges an accepted order with {"Results": [{"SignalId": 157376139}],
+            # "ResponseStatus": {"ErrorCode": "200"}}. There is no "Success" key and no
+            # "OrderID" — checking `result.get("Success")` was false for EVERY accepted
+            # order, so every successful submission logged "C2 Order Failed: Unknown error".
+            # That is worse than cosmetic: it made a real rejection indistinguishable from
+            # a fill, and sent us hunting a submission bug that did not exist (2026-08-25).
+            signal_id = next((r.get("SignalId") for r in result.get("Results") or [] if r.get("SignalId")), None)
+            if signal_id:
+                logger.info(f"C2 Order Success: SignalId {signal_id}")
             else:
-                logger.info(f"C2 Order Success: {result.get('OrderID')}")
+                # Genuine logical rejections arrive as ResponseStatus.Errors; anything with a
+                # 4xx/5xx status already raised in _post before reaching here.
+                status = result.get("ResponseStatus") or {}
+                errors = "; ".join(
+                    f"{e.get('FieldName')}: {e.get('Message')}" for e in status.get("Errors") or []
+                ) or status.get("Message")
+                logger.error(f"C2 Order Failed: {errors or f'no SignalId in response: {result}'} (Payload: {payload})")
         except Exception as e:
             logger.error(f"Exception submitting C2 order: {e}")
             raise

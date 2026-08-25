@@ -90,3 +90,65 @@ def test_c2_get_positions_empty_book(broker):
     with patch.object(broker.client, "get") as mock_get:
         mock_get.return_value = _response({"Results": []})
         assert broker.get_positions() == {}
+
+
+def test_c2_cancel_open_orders_cancels_every_working_order(broker):
+    """
+    GetStrategyOpenPositions does not reflect unfilled orders, so a second sync
+    before the first filled recomputed the same deltas and double-submitted them:
+    147 QQQ sells against 113 shares held. cancel_open_orders() is what stops that.
+    """
+    active = {
+        "Results": [
+            {"SignalId": 157376131, "OrderQuantity": 73, "C2Symbol": {"FullSymbol": "QQQ"}},
+            {"SignalId": 157376133, "OrderQuantity": 34, "C2Symbol": {"FullSymbol": "TQQQ"}},
+        ]
+    }
+    with patch.object(broker.client, "get") as mock_get, patch.object(broker.client, "request") as mock_req:
+        mock_get.return_value = _response(active)
+        mock_req.return_value = _response({"Results": [{"SignalId": 157376131}]})
+        assert broker.cancel_open_orders() == 2
+    # Both ids are mandatory: SignalId alone 400s with "StrategyId: Missing value".
+    for call, sig in zip(mock_req.call_args_list, [157376131, 157376133], strict=True):
+        assert call.args[0] == "DELETE"
+        assert call.kwargs["params"] == {"SignalId": sig, "StrategyId": 155809898}
+
+
+def test_c2_cancel_open_orders_no_working_orders(broker):
+    with patch.object(broker.client, "get") as mock_get, patch.object(broker.client, "request") as mock_req:
+        mock_get.return_value = _response({"Results": []})
+        assert broker.cancel_open_orders() == 0
+        mock_req.assert_not_called()
+
+
+def test_c2_place_order_logs_accepted_order_as_success(broker, caplog):
+    """
+    An accepted v4 order returns Results[].SignalId — there is no "Success" key.
+
+    Checking result["Success"] was falsy for every accepted order, so real
+    submissions logged "C2 Order Failed: Unknown error" and looked broken.
+    """
+    accepted = {"Results": [{"SignalId": 157376139}], "ResponseStatus": {"ErrorCode": "200"}}
+    with patch.object(broker.client, "post") as mock_post:
+        mock_post.return_value = _response(accepted)
+        with caplog.at_level("INFO"):
+            broker.place_order("QQQ", 73, "SELL", symbol_type="stock")
+    assert "C2 Order Success: SignalId 157376139" in caplog.text
+    assert "C2 Order Failed" not in caplog.text
+
+
+def test_c2_place_order_reports_field_level_rejection(broker, caplog):
+    """A rejection must surface C2's own reason, not a generic 'Unknown error'."""
+    rejected = {
+        "ResponseStatus": {
+            "ErrorCode": "400",
+            "Message": "BadRequest",
+            "Errors": [{"ErrorCode": "1121", "FieldName": "Symbol", "Message": "Invalid symbol"}],
+        }
+    }
+    with patch.object(broker.client, "post") as mock_post:
+        mock_post.return_value = _response(rejected)
+        with caplog.at_level("INFO"):
+            broker.place_order("ZZZZNOTREAL", 1, "SELL", symbol_type="stock")
+    assert "C2 Order Failed: Symbol: Invalid symbol" in caplog.text
+    assert "C2 Order Success" not in caplog.text
